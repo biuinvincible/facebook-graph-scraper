@@ -193,42 +193,143 @@ class CommentExtractor:
             else:
                 no_new_streak = 0
 
-        # Bulk click tất cả "Xem X phản hồi" buttons trên page (React portal — không liên kết DOM với comment article)
+        # Expand replies + scroll lại từ đầu để collect
         if self.scrape_replies:
             await self._expand_all_reply_buttons(page)
             await asyncio.sleep(2)
-            # Collect replies vừa được load
-            self._processed_el_count = 0  # reset để pick up tất cả elements hiện tại
-            await self._collect_batch(page, post_id, seen_ids, comments, edges)
+            # Scroll về đầu comment section
+            await self._scroll_to_comments(page)
+            await asyncio.sleep(1)
+            # Reset và scroll lại để pick up replies đã load
+            self._processed_el_count = 0
+            no_new_streak_r = 0
+            for _ in range(40):
+                if len(comments) >= self.max_comments:
+                    break
+                await self._scroll_incremental(page, px=300, steps=1, delay=0.3)
+                new_r = await self._collect_batch(page, post_id, seen_ids, comments, edges)
+                if new_r == 0:
+                    no_new_streak_r += 1
+                    if no_new_streak_r >= 5:
+                        break
+                else:
+                    no_new_streak_r = 0
+            # Final pass trên full page cho replies là portals
+            await self._collect_replies_fullpage(page, post_id, seen_ids, comments, edges)
 
         logger.info(f"Extracted {len(comments)} comments for post {post_id}")
         return comments, edges
 
+    async def _collect_replies_fullpage(
+        self, page: Page, post_id: str, seen_ids: set,
+        comments: list, edges: list
+    ):
+        """
+        Sau khi expand tất cả reply buttons, collect replies trên full page.
+        Replies render như React portals ngoài foreground container → không dùng scoped root.
+        Chỉ lấy elements chưa có trong seen_ids để tránh duplicate.
+        """
+        REPLY_SELS = (
+            'div[aria-label*="Bình luận dưới tên"], '
+            'div[aria-label*="Phản hồi bình luận của"], '
+            'div[aria-label*="Phản hồi của"], '
+            'div[aria-label*="Comment by"], '
+            'div[aria-label*="Reply by"], '
+            'div[aria-label*="Replied to"]'
+        )
+        try:
+            all_els = await page.query_selector_all(REPLY_SELS)
+            new_count = 0
+            skip_count = 0
+            for el in all_els:
+                try:
+                    comment = await self._extract_single_comment(el, post_id, None)
+                    if comment and comment.comment_id not in seen_ids:
+                        seen_ids.add(comment.comment_id)
+                        comments.append(comment)
+                        new_count += 1
+                        if comment.author_id:
+                            edges.append(UserCommentEdge(
+                                user_id=comment.author_id,
+                                comment_id=comment.comment_id,
+                                relation_type="author",
+                                timestamp=comment.timestamp,
+                            ))
+                    else:
+                        skip_count += 1
+                except Exception:
+                    skip_count += 1
+                    continue
+            logger.debug(f"collect_replies_fullpage: {len(all_els)} els, +{new_count} new, {skip_count} skipped/fail")
+        except Exception as e:
+            logger.debug(f"collect_replies_fullpage error: {e}")
+
     async def _expand_all_reply_buttons(self, page: Page):
         """
-        Click tất cả 'Xem X phản hồi' / 'See X replies' buttons trên page.
-        Buttons là React portals — không nằm trong comment article DOM → dùng page-level search.
-        Selector: div[role="button"] chứa span có text "phản hồi" hoặc số + "replies".
+        Click từng 'Xem X phản hồi' button bằng cách scroll từng comment vào viewport
+        trước khi click. Cần thiết vì Facebook chỉ fetch data cho comments đang visible
+        trong custom scroll viewport (data-thumb container).
         """
-        for attempt in range(5):  # tối đa 5 lần (mỗi lần có thể xuất hiện "Xem thêm phản hồi" mới)
+        center = await self._get_post_scroll_center(page)
+
+        # Scroll dần và click reply buttons từng bước
+        for _ in range(80):  # tối đa 80 scroll steps
+            # Tìm và click button "Xem X phản hồi" hiện visible trong viewport
             clicked = await page.evaluate("""() => {
                 let count = 0;
-                // Tìm tất cả div[role="button"] có text "phản hồi" + số
                 for (const btn of document.querySelectorAll('div[role="button"]')) {
                     const t = btn.innerText ? btn.innerText.trim() : '';
                     if (!t) continue;
-                    const hasReplyWord = t.includes('phản hồi') || t.includes('replies') || t.includes('Replies');
+                    const hasReplyWord = t.includes('phản hồi') || t.includes('replies');
                     const hasNumber = /[0-9]/.test(t) || t.includes('thêm') || t.toLowerCase().includes('more');
-                    if (hasReplyWord && hasNumber) {
+                    const isHide = t.includes('Ẩn') || t.toLowerCase().includes('hide');
+                    if (!hasReplyWord || !hasNumber || isHide) continue;
+                    // Chỉ click nếu button đang trong viewport (visible)
+                    const r = btn.getBoundingClientRect();
+                    if (r.top >= 0 && r.bottom <= window.innerHeight) {
                         btn.click();
                         count++;
                     }
                 }
                 return count;
             }""")
-            if clicked == 0:
+
+            if clicked > 0:
+                await asyncio.sleep(1.5)  # chờ replies load
+
+            # Scroll thêm xuống dưới để reveal comments tiếp theo
+            if center:
+                await page.mouse.move(center['cx'], center['cy'])
+                await page.mouse.wheel(0, 300)
+            else:
+                await page.mouse.wheel(0, 300)
+            await asyncio.sleep(0.4)
+
+            # Kiểm tra đã scroll đến cuối chưa
+            at_bottom = await page.evaluate("""() => {
+                const thumbs = [...document.querySelectorAll('[data-thumb]')];
+                let best = null, bestH = 0;
+                for (const t of thumbs) {
+                    const h = parseFloat(t.style.height || '0');
+                    if (h > bestH) { bestH = h; best = t; }
+                }
+                if (!best) return true;
+                const p = best.parentElement;
+                return !p || Math.abs(p.scrollTop + p.clientHeight - p.scrollHeight) < 20;
+            }""")
+            if at_bottom:
+                # Một lần nữa sau khi ở cuối để đảm bảo
+                await page.evaluate("""() => {
+                    for (const btn of document.querySelectorAll('div[role="button"]')) {
+                        const t = btn.innerText ? btn.innerText.trim() : '';
+                        const hasReplyWord = t.includes('phản hồi') || t.includes('replies');
+                        const hasNumber = /[0-9]/.test(t) || t.includes('thêm');
+                        const isHide = t.includes('Ẩn') || t.toLowerCase().includes('hide');
+                        if (hasReplyWord && hasNumber && !isHide) btn.click();
+                    }
+                }""")
+                await asyncio.sleep(2)
                 break
-            await asyncio.sleep(1.5)
 
     async def _collect_batch(
         self, page: Page, post_id: str, seen_ids: set,
@@ -543,6 +644,10 @@ class CommentExtractor:
                 'div[aria-label*="Comment by"], '
                 'div[aria-label*="Bình luận của"], '
                 'div[aria-label*="Bình luận dưới tên"], '
+                'div[aria-label*="Phản hồi bình luận của"], '
+                'div[aria-label*="Phản hồi của"], '
+                'div[aria-label*="Reply by"], '
+                'div[aria-label*="Replied to"], '
                 'ul > li div[role="article"]'
             )
 
