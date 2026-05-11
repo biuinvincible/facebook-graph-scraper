@@ -196,22 +196,23 @@ class CommentExtractor:
         # Expand replies + scroll lại từ đầu để collect
         if self.scrape_replies:
             await self._expand_all_reply_buttons(page)
-            await asyncio.sleep(2)
+            await asyncio.sleep(10)  # chờ GraphQL responses về
             # Scroll về đầu comment section
             await self._scroll_to_comments(page)
             await asyncio.sleep(1)
             # Reset và scroll lại để pick up replies đã load
             self._processed_el_count = 0
             no_new_streak_r = 0
-            for _ in range(40):
+            for _ in range(60):  # nhiều iterations hơn
                 if len(comments) >= self.max_comments:
                     break
-                await self._scroll_incremental(page, px=300, steps=1, delay=0.3)
+                await self._scroll_incremental(page, px=250, steps=1, delay=0.4)
                 new_r = await self._collect_batch(page, post_id, seen_ids, comments, edges)
                 if new_r == 0:
                     no_new_streak_r += 1
-                    if no_new_streak_r >= 5:
+                    if no_new_streak_r >= 8:  # threshold cao hơn
                         break
+                    await asyncio.sleep(0.5)  # thêm wait khi empty
                 else:
                     no_new_streak_r = 0
             # Final pass trên full page cho replies là portals
@@ -266,70 +267,80 @@ class CommentExtractor:
 
     async def _expand_all_reply_buttons(self, page: Page):
         """
-        Click từng 'Xem X phản hồi' button bằng cách scroll từng comment vào viewport
-        trước khi click. Cần thiết vì Facebook chỉ fetch data cho comments đang visible
-        trong custom scroll viewport (data-thumb container).
+        Click từng 'Xem X phản hồi' button bằng cách scroll từng comment vào viewport.
+        Facebook chỉ fetch data cho replies khi button visible trong viewport.
+
+        Strategy: scroll toàn bộ comment section từ đầu đến cuối,
+        click mọi reply button visible ở mỗi bước.
         """
         center = await self._get_post_scroll_center(page)
 
-        # Scroll dần và click reply buttons từng bước
-        for _ in range(80):  # tối đa 80 scroll steps
-            # Tìm và click button "Xem X phản hồi" hiện visible trong viewport
-            clicked = await page.evaluate("""() => {
-                let count = 0;
-                for (const btn of document.querySelectorAll('div[role="button"]')) {
-                    const t = btn.innerText ? btn.innerText.trim() : '';
-                    if (!t) continue;
-                    const hasReplyWord = t.includes('phản hồi') || t.includes('replies');
-                    const hasNumber = /[0-9]/.test(t) || t.includes('thêm') || t.toLowerCase().includes('more');
-                    const isHide = t.includes('Ẩn') || t.toLowerCase().includes('hide');
-                    if (!hasReplyWord || !hasNumber || isHide) continue;
-                    // Chỉ click nếu button đang trong viewport (visible)
-                    const r = btn.getBoundingClientRect();
-                    if (r.top >= 0 && r.bottom <= window.innerHeight) {
-                        btn.click();
-                        count++;
-                    }
-                }
-                return count;
-            }""")
+        # Tính số steps cần thiết dựa trên track height
+        track_height = await page.evaluate("""() => {
+            const thumbs = [...document.querySelectorAll('[data-thumb]')];
+            let best = 0;
+            for (const t of thumbs) best = Math.max(best, parseFloat(t.style.height || '0'));
+            return best;
+        }""")
+        viewport_h = await page.evaluate("() => window.innerHeight")
+        scroll_px = 250
+        # Số bước = track_height / scroll_px, tối thiểu 20, tối đa 150
+        steps = max(20, min(150, int((track_height or 3000) / scroll_px) + 10))
+        logger.debug(f"expand_all_reply_buttons: track={track_height:.0f}px steps={steps}")
 
-            if clicked > 0:
-                await asyncio.sleep(1.5)  # chờ replies load
+        # Scroll về đầu comment section
+        if center:
+            await page.mouse.move(center['cx'], center['cy'])
+            for _ in range(40):  # cuộn lên tận cùng
+                await page.mouse.wheel(0, -600)
+            await asyncio.sleep(0.8)
 
-            # Scroll thêm xuống dưới để reveal comments tiếp theo
+        # Scroll qua toàn bộ container, dùng ElementHandle.click() (CDP, isTrusted=true)
+        # JS btn.click() có isTrusted=false → Facebook block GraphQL fetch
+        # ElementHandle.click() dùng CDP nên isTrusted=true
+        clicked_total = 0
+        seen_btn_texts = set()  # tránh click cùng 1 button nhiều lần
+
+        for step in range(steps):
+            # Tìm visible reply buttons bằng Playwright locator (không JS click)
+            all_btns = await page.query_selector_all('div[role="button"]')
+            for btn_el in all_btns:
+                try:
+                    t = (await btn_el.inner_text()).strip()
+                    if not t:
+                        continue
+                    has_reply = 'phản hồi' in t or 'replies' in t.lower()
+                    has_num = any(c.isdigit() for c in t) or 'thêm' in t or 'more' in t.lower()
+                    is_hide = 'Ẩn' in t or 'hide' in t.lower()
+                    if not has_reply or not has_num or is_hide:
+                        continue
+
+                    # Kiểm tra button trong viewport (không dùng JS)
+                    box = await btn_el.bounding_box()
+                    if not box:
+                        continue
+                    vp = page.viewport_size or {'height': 900}
+                    if box['y'] < 0 or box['y'] + box['height'] > vp['height']:
+                        continue  # off-screen
+
+                    btn_key = f"{t[:20]}|{box['x']:.0f}|{box['y']:.0f}"
+                    if btn_key in seen_btn_texts:
+                        continue
+                    seen_btn_texts.add(btn_key)
+
+                    # ElementHandle.click() = CDP = isTrusted=true
+                    await btn_el.click(timeout=3000)
+                    await asyncio.sleep(1.5)  # chờ GraphQL response
+                    clicked_total += 1
+                except Exception:
+                    continue
+
             if center:
                 await page.mouse.move(center['cx'], center['cy'])
-                await page.mouse.wheel(0, 300)
-            else:
-                await page.mouse.wheel(0, 300)
+            await page.mouse.wheel(0, scroll_px)
             await asyncio.sleep(0.4)
 
-            # Kiểm tra đã scroll đến cuối chưa
-            at_bottom = await page.evaluate("""() => {
-                const thumbs = [...document.querySelectorAll('[data-thumb]')];
-                let best = null, bestH = 0;
-                for (const t of thumbs) {
-                    const h = parseFloat(t.style.height || '0');
-                    if (h > bestH) { bestH = h; best = t; }
-                }
-                if (!best) return true;
-                const p = best.parentElement;
-                return !p || Math.abs(p.scrollTop + p.clientHeight - p.scrollHeight) < 20;
-            }""")
-            if at_bottom:
-                # Một lần nữa sau khi ở cuối để đảm bảo
-                await page.evaluate("""() => {
-                    for (const btn of document.querySelectorAll('div[role="button"]')) {
-                        const t = btn.innerText ? btn.innerText.trim() : '';
-                        const hasReplyWord = t.includes('phản hồi') || t.includes('replies');
-                        const hasNumber = /[0-9]/.test(t) || t.includes('thêm');
-                        const isHide = t.includes('Ẩn') || t.toLowerCase().includes('hide');
-                        if (hasReplyWord && hasNumber && !isHide) btn.click();
-                    }
-                }""")
-                await asyncio.sleep(2)
-                break
+        logger.debug(f"expand_all_reply_buttons: {clicked_total} CDP clicks total")
 
     async def _collect_batch(
         self, page: Page, post_id: str, seen_ids: set,
@@ -676,11 +687,9 @@ class CommentExtractor:
                     comment = await self._extract_single_comment(el, post_id, None)
                     if comment and comment.comment_id not in seen_ids:
                         comments.append(comment)
-
-                        # Extract replies if enabled
-                        if self.scrape_replies:
-                            replies = await self._extract_replies(el, post_id, comment.comment_id, seen_ids)
-                            comments.extend(replies)
+                        # NOTE: replies xử lý sau qua _expand_all_reply_buttons + _collect_replies_fullpage
+                        # KHÔNG gọi _extract_replies ở đây — nó search trong parent_el (foreground container)
+                        # và pollute seen_ids với các top-level comments khác
                 except Exception as e:
                     logger.debug(f"Comment extraction error: {e}")
                     continue
