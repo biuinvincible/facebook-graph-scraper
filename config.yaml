@@ -1,0 +1,75 @@
+scraper:
+  headless: false           # Set true for production, false for debugging
+  slow_mo: 100              # ms delay between actions (human-like)
+  timeout: 30000            # Page load timeout ms
+  viewport:
+    width: 1366
+    height: 768
+
+  # Anti-detection
+  stealth: true
+  randomize_delays: true
+  min_delay: 1.5            # seconds between requests
+  max_delay: 4.0
+
+  # Session
+  cookies_file: "cookies/session.json"
+  save_session: true
+
+  # Proxy (optional)
+  proxy:
+    enabled: false
+    server: ""              # http://user:pass@host:port
+    rotate: false
+    list_file: "proxies.txt"
+
+storage:
+  output_dir: "data/raw"
+  media_dir: "data/media"
+  db_path: "data/facebook_graph.db"
+  json_dir: "data/json"
+  export_format: ["json", "sqlite"]  # json, sqlite, csv
+  download_media: true
+  max_media_size_mb: 50
+
+scraping:
+  # What to scrape per post
+  scrape_comments: true
+  max_comments: 500
+  scrape_replies: true
+  max_replies_per_comment: 50
+  scrape_reactions: true
+  scrape_shares: true
+  scrape_media: true
+  scrape_user_info: true
+
+  # Pagination
+  max_posts_per_target: 200
+  scroll_pause: 2.0
+  max_scroll_attempts: 50
+
+  # Targets (added via CLI or config)
+  targets: []
+
+ocr:
+  enabled: true
+  lang: "vie+eng"           # Vietnamese + English
+  confidence_threshold: 60
+
+protection:
+  # Checkpoint: resume sau khi bị ban / crash
+  checkpoint_file: "data/checkpoint.json"
+  checkpoint_flush_every: 5        # Ghi ra disk sau mỗi 5 posts
+
+  # Session rotation: đặt cookies của nhiều tài khoản vào cookies/
+  # Tên file: session.json (mặc định), session_2.json, session_3.json, ...
+  sessions_dir: "cookies"
+
+  # Backoff settings
+  max_retries_per_target: 3
+  backoff_base_seconds: 60         # 60s → 120s → 240s (exponential)
+
+logging:
+  level: "INFO"
+  file: "logs/scraper.log"
+  rotation: "10 MB"

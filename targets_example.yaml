@@ -1,0 +1,39 @@
+# Example targets file for Facebook Graph Scraper
+# Run with: python main.py scrape --from-file targets_example.yaml
+
+targets:
+  # Public Pages
+  - type: page
+    url: https://www.facebook.com/vnexpress.net
+    max_posts: 50
+
+  - type: page
+    url: https://www.facebook.com/tuoitre
+    max_posts: 50
+
+  # Public Groups (requires login for most)
+  - type: group
+    url: https://www.facebook.com/groups/amthucvietnam
+    max_posts: 100
+
+  # Search by keyword (requires login)
+  - type: search
+    query: "ẩm thực sài gòn"
+    max_posts: 200
+
+  - type: search
+    query: "review quán ăn hà nội"
+    max_posts: 100
+
+  # Hashtags
+  - type: hashtag
+    query: foodreview
+    max_posts: 150
+
+  - type: hashtag
+    query: saigonfood
+    max_posts: 100
+
+  # Single posts
+  - type: post
+    url: https://www.facebook.com/permalink/REPLACE_WITH_REAL_POST_ID

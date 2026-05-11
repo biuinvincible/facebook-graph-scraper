@@ -1,0 +1,27 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Data (usually too large to commit)
+data/
+cookies/
+logs/
+proxies/
+
+# Keep structure
+!data/.gitkeep
+!cookies/.gitkeep
+!logs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
