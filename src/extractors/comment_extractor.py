@@ -295,50 +295,62 @@ class CommentExtractor:
                 await page.mouse.wheel(0, -600)
             await asyncio.sleep(0.8)
 
-        # Scroll qua toàn bộ container, dùng ElementHandle.click() (CDP, isTrusted=true)
+        # Scroll qua toàn bộ container, dùng page.mouse.click() (CDP, isTrusted=true)
         # JS btn.click() có isTrusted=false → Facebook block GraphQL fetch
-        # ElementHandle.click() dùng CDP nên isTrusted=true
+        # Dùng JS để lấy tọa độ (1 call/step), sau đó CDP click từng button
         clicked_total = 0
-        seen_btn_texts = set()  # tránh click cùng 1 button nhiều lần
+        seen_btn_keys = set()
 
         for step in range(steps):
-            # Tìm visible reply buttons bằng Playwright locator (không JS click)
-            all_btns = await page.query_selector_all('div[role="button"]')
-            for btn_el in all_btns:
+            # 1 JS call để lấy tất cả visible reply buttons + tọa độ
+            btn_list = await page.evaluate("""() => {
+                const vp = window.innerHeight;
+                const result = [];
+                for (const btn of document.querySelectorAll('div[role="button"]')) {
+                    const t = btn.innerText ? btn.innerText.trim() : '';
+                    if (!t) continue;
+                    const hasReply = t.includes('phản hồi') || t.includes('replies');
+                    const hasNum = /[0-9]/.test(t) || t.includes('thêm') || t.toLowerCase().includes('more');
+                    const isHide = t.includes('Ẩn') || t.toLowerCase().includes('hide');
+                    if (!hasReply || !hasNum || isHide) continue;
+                    const r = btn.getBoundingClientRect();
+                    if (r.top < vp && r.bottom > 0 && r.width > 0) {
+                        result.push({ x: r.left + r.width/2, y: r.top + r.height/2, text: t.slice(0,25) });
+                    }
+                }
+                return result;
+            }""")
+
+            for b in btn_list:
+                key = f"{b['text']}|{b['x']:.0f}|{b['y']:.0f}"
+                if key in seen_btn_keys:
+                    continue
+                seen_btn_keys.add(key)
+                # CDP click via locator at coordinates = isTrusted=true
                 try:
-                    t = (await btn_el.inner_text()).strip()
-                    if not t:
-                        continue
-                    has_reply = 'phản hồi' in t or 'replies' in t.lower()
-                    has_num = any(c.isdigit() for c in t) or 'thêm' in t or 'more' in t.lower()
-                    is_hide = 'Ẩn' in t or 'hide' in t.lower()
-                    if not has_reply or not has_num or is_hide:
-                        continue
-
-                    # Kiểm tra button trong viewport (không dùng JS)
-                    box = await btn_el.bounding_box()
-                    if not box:
-                        continue
-                    vp = page.viewport_size or {'height': 900}
-                    if box['y'] < 0 or box['y'] + box['height'] > vp['height']:
-                        continue  # off-screen
-
-                    btn_key = f"{t[:20]}|{box['x']:.0f}|{box['y']:.0f}"
-                    if btn_key in seen_btn_texts:
-                        continue
-                    seen_btn_texts.add(btn_key)
-
-                    # ElementHandle.click() = CDP = isTrusted=true
-                    await btn_el.click(timeout=3000)
-                    await asyncio.sleep(1.5)  # chờ GraphQL response
-                    clicked_total += 1
+                    await page.mouse.move(b['x'], b['y'])
+                    await asyncio.sleep(0.08)
+                    # Verify element still at position before clicking
+                    still_there = await page.evaluate("""([x, y]) => {
+                        const el = document.elementFromPoint(x, y);
+                        if (!el) return false;
+                        const btn = el.closest('div[role="button"]');
+                        if (!btn) return false;
+                        const t = btn.innerText.trim();
+                        return (t.includes('phản hồi') || t.includes('replies')) &&
+                               /[0-9]/.test(t) && !t.includes('Ẩn');
+                    }""", [b['x'], b['y']])
+                    if still_there:
+                        await page.mouse.click(b['x'], b['y'])
+                        await asyncio.sleep(1.5)
+                        clicked_total += 1
                 except Exception:
                     continue
 
             if center:
                 await page.mouse.move(center['cx'], center['cy'])
             await page.mouse.wheel(0, scroll_px)
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.3)
 
         logger.debug(f"expand_all_reply_buttons: {clicked_total} CDP clicks total")
 

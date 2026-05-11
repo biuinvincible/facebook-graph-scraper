@@ -15,7 +15,7 @@ import yaml
 TARGET_URL   = "https://www.facebook.com/share/p/1CqEkXAdqc/"
 MAX_POSTS    = 1
 SKIP_NO_TEXT = False
-MAX_COMMENTS = 200
+MAX_COMMENTS = 80
 SKIP_TRUNCATED = False
 
 
