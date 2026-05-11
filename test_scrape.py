@@ -12,10 +12,10 @@ from src.storage.json_storage import JsonStorage
 from src.storage.database import Database
 import yaml
 
-TARGET_URL   = "https://www.facebook.com/share/p/1GLP5QoeQf/"
+TARGET_URL   = "https://www.facebook.com/share/p/17EuoGgn26/"
 MAX_POSTS    = 1
 SKIP_NO_TEXT = False
-MAX_COMMENTS = 100
+MAX_COMMENTS = 300
 SKIP_TRUNCATED = False
 
 

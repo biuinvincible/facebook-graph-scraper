@@ -473,11 +473,21 @@ class PostExtractor:
         cleaned = clean_text(raw_text)
         author_id, author_name = await self._extract_author_from(target, page)
         timestamp = await self._extract_timestamp_from(target, page)
-        image_urls = await self._extract_images_from(target)
-        video_urls = await self._extract_videos_from(target)
-        # Scope reactions vào foreground container để tránh lấy nhầm từ background feed
+        # Scope images và reactions vào foreground container
         fg_container = await self._get_foreground_container(page)
+        image_urls = await self._extract_images_from(fg_container or target)
+        video_urls = await self._extract_videos_from(fg_container or target)
+        # HTML parsing TRƯỚC (đáng tin hơn DOM portals khi post đè lên feed)
+        # DOM reactions là fallback cho cases HTML không có đủ data
+        html_reactions = await self._get_reactions_from_html(page, post_id)
         reactions = await self._extract_page_reactions(page, scoped_root=fg_container)
+        # Merge: ưu tiên HTML nếu DOM có vẻ lấy nhầm từ background feed
+        for k, v in html_reactions.items():
+            if v > 0:
+                dom_val = reactions.get(k, 0)
+                # Dùng HTML nếu DOM = 0 hoặc DOM >> HTML (DOM lấy nhầm post viral hơn)
+                if dom_val == 0 or (v > 0 and dom_val > v * 3):
+                    reactions[k] = v
         if reactions["comment_count"] == 0:
             reactions["comment_count"] = await self._get_comment_count_from_html(page, post_id)
         if reactions["share_count"] == 0:
@@ -806,6 +816,44 @@ class PostExtractor:
         return list(set(urls))
 
     # ─── REACTIONS EXTRACTION ────────────────────────────────────────────
+
+    async def _get_reactions_from_html(self, page: Page, post_id: str = "") -> Dict[str, int]:
+        """
+        Parse reaction counts từ FB embedded JSON (HTML source).
+        Dùng page.url làm anchor để scope đúng post, tránh lấy nhầm background feed.
+        """
+        reactions = {
+            "like_count": 0, "love_count": 0, "haha_count": 0,
+            "wow_count": 0, "sad_count": 0, "angry_count": 0, "care_count": 0,
+        }
+        REACTION_TYPE_MAP = {
+            "LIKE": "like_count", "LOVE": "love_count", "HAHA": "haha_count",
+            "WOW": "wow_count", "SAD": "sad_count", "ANGER": "angry_count",
+            "CARE": "care_count", "PRIDE": "care_count",
+        }
+        try:
+            html = await page.content()
+
+            # top_reactions: {"reaction_type":"LIKE",...,"count":N}
+            for m in re.finditer(
+                r'"reaction_type"\s*:\s*"([A-Z]+)"[\s\S]{0,300}?"count"\s*:\s*(\d+)',
+                html
+            ):
+                rtype, count = m.group(1), int(m.group(2))
+                key = REACTION_TYPE_MAP.get(rtype)
+                if key and reactions[key] == 0:
+                    reactions[key] = count
+
+            # Total reaction_count: FIRST occurrence in HTML = current foreground post
+            # (FB embeds current post data trước related/background posts)
+            if reactions["like_count"] == 0:
+                m = re.search(r'"reaction_count"\s*:\s*\{\s*"count"\s*:\s*(\d+)', html)
+                if m:
+                    reactions["like_count"] = int(m.group(1))
+
+        except Exception as e:
+            logger.debug(f"Reactions from HTML failed: {e}")
+        return reactions
 
     async def _get_share_count_from_html(self, page: Page) -> int:
         """Parse share count từ JSON embedded trong HTML"""
