@@ -429,6 +429,40 @@ class PostExtractor:
         except Exception as e:
             logger.debug(f"og:description fallback error: {e}")
 
+        # ── Strategy 3: foreground container (data-thumb parent) ──────────────
+        # Personal/creator pages không có excerpt trong title và og:description empty
+        # → tìm data-ad-* element trong foreground container trực tiếp
+        try:
+            fg_el = await page.evaluate_handle("""() => {
+                const thumbs = [...document.querySelectorAll('[data-thumb]')];
+                let best = null, bestH = 0;
+                for (const t of thumbs) {
+                    const h = parseFloat(t.style.height || '0');
+                    if (h > bestH) { bestH = h; best = t; }
+                }
+                if (!best || bestH < 200) return null;
+                const container = best.parentElement;
+                // Tìm data-ad-* element trong container
+                const sels = [
+                    'div[data-ad-rendering-role="story_message"]',
+                    'div[data-ad-comet-preview="message"]',
+                    'div[data-ad-preview="message"]',
+                ];
+                for (const sel of sels) {
+                    const el = container.querySelector(sel);
+                    if (el && el.innerText.trim().length > 2) return el;
+                }
+                return null;
+            }""")
+            fg_text_el = fg_el.as_element()
+            if fg_text_el:
+                text = (await fg_text_el.inner_text()).strip()
+                if text and len(text) > 2:
+                    logger.debug(f"Matched via foreground container: {repr(text[:50])}")
+                    return fg_text_el, text
+        except Exception as e:
+            logger.debug(f"Foreground container fallback error: {e}")
+
         return None, ""
 
     async def _extract_post_data(self, page: Page, url: str) -> Optional[PostNode]:
@@ -583,15 +617,21 @@ class PostExtractor:
                 pass
         return None
 
+    # Paths của stickers, emojis, reaction icons — không phải ảnh bài post
+    _EXCLUDE_IMG_PATHS = ("t39.1997-6", "t45.1600-4", "emoji", "/rsrc.php/", "static.xx.")
+
     async def _extract_images_from(self, root) -> list:
         urls = []
         try:
             imgs = await root.query_selector_all('img[src*="fbcdn.net"]:not([alt=""])')
             for img in imgs:
                 src = await img.get_attribute("src")
-                if src and "fbcdn.net" in src and "emoji" not in src and "/rsrc.php/" not in src:
-                    if any(s in src for s in ["scontent", "_n.", "_o.", "1080", "720", "540"]):
-                        urls.append(src)
+                if not src or "fbcdn.net" not in src:
+                    continue
+                if any(p in src for p in self._EXCLUDE_IMG_PATHS):
+                    continue
+                if any(s in src for s in ["scontent", "_n.", "_o.", "1080", "720", "540"]):
+                    urls.append(src)
         except Exception:
             pass
         try:
