@@ -265,13 +265,21 @@ class GraphSample:
                     break
             neighbors.append(neighbor)
 
-        # Build comment tree
+        # Build comment tree — recursive để hỗ trợ sub-replies (depth >= 2)
+        def build_subtree(parent_id):
+            children = [c for c in self.comments if c.parent_id == parent_id]
+            result = []
+            for c in children:
+                d = c.to_dict()
+                d["replies"] = build_subtree(c.comment_id)
+                result.append(d)
+            return result
+
         comment_tree = []
         top_comments = [c for c in self.comments if c.parent_id is None]
         for tc in top_comments:
-            replies = [c.to_dict() for c in self.comments if c.parent_id == tc.comment_id]
             tc_dict = tc.to_dict()
-            tc_dict["replies"] = replies
+            tc_dict["replies"] = build_subtree(tc.comment_id)
             comment_tree.append(tc_dict)
 
         return {

@@ -234,16 +234,17 @@ class CommentExtractor:
         REPLY_SELS = (
             'div[aria-label*="Bình luận dưới tên"], '
             'div[aria-label*="Phản hồi bình luận của"], '
+            'div[aria-label*="đáp lại phản hồi của"], '   # sub-replies
             'div[aria-label*="Phản hồi của"], '
             'div[aria-label*="Comment by"], '
             'div[aria-label*="Reply by"], '
             'div[aria-label*="Replied to"]'
         )
 
-        # Build lookup: author_name → comment_id của top-level comments đã collect
+        # Build lookup: author_name → comment_id — bao gồm cả depth=1 để match sub-replies
         parent_name_map: dict = {}
         for c in comments:
-            if c.parent_id is None and c.author_name and c.comment_id not in parent_name_map.values():
+            if c.author_name and c.comment_id not in parent_name_map.values():
                 parent_name_map.setdefault(c.author_name, c.comment_id)
 
         # Content-based dedup: (author_id + text[:60]) — tránh duplicate khi ID hash lệch
@@ -343,15 +344,19 @@ class CommentExtractor:
                         skip_count += 1; continue
                     seen_content.add(content_key)
 
-                    # parent_id từ aria-label
+                    # parent_id từ aria-label — hỗ trợ nhiều format
                     parent_id: Optional[str] = None
-                    m = re.search(r'Phản hồi bình luận của (.+?)\s+dưới tên', aria)
-                    if m:
-                        parent_id = parent_name_map.get(m.group(1).strip())
-                    if not parent_id:
-                        m = re.search(r"Replied to (.+?)'s comment", aria)
+                    for pattern in [
+                        r'Phản hồi bình luận của (.+?)\s+dưới tên',  # first-level reply
+                        r'đáp lại phản hồi của (.+?)\s+vào',          # sub-reply VN
+                        r"Replied to (.+?)'s comment",                  # EN
+                        r'replied to (.+?)$',                           # EN fallback
+                    ]:
+                        m = re.search(pattern, aria, re.IGNORECASE)
                         if m:
                             parent_id = parent_name_map.get(m.group(1).strip())
+                            if parent_id:
+                                break
 
                     # comment_id: dùng numeric ID từ URL nếu có (khớp với _get_comment_id)
                     # fallback: hash(aria|author_href|text) — cùng công thức với _get_comment_id
@@ -380,6 +385,9 @@ class CommentExtractor:
                         image_urls=image_urls,
                     )
                     comments.append(comment)
+                    # Cập nhật parent_name_map ngay để các sub-replies phía sau có thể dùng
+                    if author_name:
+                        parent_name_map.setdefault(author_name, comment_id)
                     new_count += 1
                     if author_id:
                         edges.append(UserCommentEdge(
