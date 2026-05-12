@@ -8,14 +8,15 @@ from src.extractors.post_extractor import PostExtractor
 from src.extractors.comment_extractor import CommentExtractor
 from src.scrapers.page_scraper import PageScraper
 from src.graph.edge_builder import EdgeBuilder
+from src.graph.schema import UserNode
 from src.storage.json_storage import JsonStorage
 from src.storage.database import Database
 import yaml
 
-TARGET_URL   = "https://www.facebook.com/PageWSS/"
-MAX_POSTS    = 5
-SKIP_NO_TEXT = True
-MAX_COMMENTS = 80
+TARGET_URL   = "https://www.facebook.com/share/p/1Co7Pxo6bu/"
+MAX_POSTS    = 1
+SKIP_NO_TEXT = False
+MAX_COMMENTS = 100
 SKIP_TRUNCATED = False
 
 
@@ -165,7 +166,8 @@ async def run():
 
                     print(f"  text    : {repr(post.raw_text[:100])}")
                     print(f"  imgs    : {len(post.image_urls)}")
-                    print(f"  likes   : {post.like_count}")
+                    rxn = f"like={post.like_count} love={post.love_count} haha={post.haha_count} wow={post.wow_count} sad={post.sad_count} angry={post.angry_count} care={post.care_count} → total={post.total_reactions()}"
+                    print(f"  reactions: {rxn}")
                     print(f"  hashtags: {post.hashtags}")
 
                     comments, c_edges = await ce.extract_all_comments(tab, post.post_id)
@@ -182,8 +184,12 @@ async def run():
                     if imgs_in_comments:
                         print(f"  comment imgs downloaded: {imgs_in_comments}")
 
-                    # _build_sample() tạo đầy đủ: author edge, comment edges, reply edges, mention edges
-                    sample = page_scraper._build_sample(post, None, comments, c_edges)
+                    # Build author UserNode từ post metadata
+                    author_node = UserNode(
+                        user_id=post.author_id or "",
+                        display_name=post.author_name or "",
+                    ) if post.author_id else None
+                    sample = page_scraper._build_sample(post, author_node, comments, c_edges)
                     all_posts.append(post)
 
                     u_post = len(sample.edges_user_post)

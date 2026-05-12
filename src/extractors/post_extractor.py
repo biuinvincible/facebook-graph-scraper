@@ -511,17 +511,13 @@ class PostExtractor:
         fg_container = await self._get_foreground_container(page)
         image_urls = await self._extract_images_from(fg_container or target)
         video_urls = await self._extract_videos_from(fg_container or target)
-        # HTML parsing TRƯỚC (đáng tin hơn DOM portals khi post đè lên feed)
-        # DOM reactions là fallback cho cases HTML không có đủ data
-        html_reactions = await self._get_reactions_from_html(page, post_id)
+        # DOM scoped vào fg_container TRƯỚC — tránh lấy nhầm background feed portals
         reactions = await self._extract_page_reactions(page, scoped_root=fg_container)
-        # Merge: ưu tiên HTML nếu DOM có vẻ lấy nhầm từ background feed
+        # HTML fill-in: bổ sung các type DOM còn 0, nhưng KHÔNG ghi đè giá trị DOM đã có
+        html_reactions = await self._get_reactions_from_html(page, post_id)
         for k, v in html_reactions.items():
-            if v > 0:
-                dom_val = reactions.get(k, 0)
-                # Dùng HTML nếu DOM = 0 hoặc DOM >> HTML (DOM lấy nhầm post viral hơn)
-                if dom_val == 0 or (v > 0 and dom_val > v * 3):
-                    reactions[k] = v
+            if v > 0 and reactions.get(k, 0) == 0:
+                reactions[k] = v
         if reactions["comment_count"] == 0:
             reactions["comment_count"] = await self._get_comment_count_from_html(page, post_id)
         if reactions["share_count"] == 0:
@@ -595,12 +591,70 @@ class PostExtractor:
                 )
                 if el:
                     name = (await el.inner_text()).strip()
-                    href = await el.get_attribute("href") or ""
-                    uid = extract_user_id(href) or ""
+                    href = await el.evaluate("e => e.href || e.getAttribute('href') || ''")
+                    if href and href.startswith("/"):
+                        href = "https://www.facebook.com" + href
+                    uid = extract_user_id(href) or None
                     if name:
                         return uid, name
             except Exception:
                 pass
+
+        # Fallback: dùng page.url (Python) để extract slug, tìm page-level link trong DOM
+        # Dùng cho page posts — tên page nằm trong link có href = /PageSlug (không có /posts/)
+        try:
+            from urllib.parse import urlparse as _urlparse
+            current_url = fallback_page.url
+            _parts = _urlparse(current_url).path.strip("/").split("/")
+            if len(_parts) >= 2 and _parts[1] in ("posts", "permalink", "photos", "videos"):
+                slug = _parts[0]
+                link_els = await fallback_page.query_selector_all(f'a[href*="/{slug}"]')
+                for link_el in link_els:
+                    try:
+                        href = await link_el.evaluate("e => e.href || ''")
+                        if not href:
+                            continue
+                        _up = _urlparse(href)
+                        _pp = [p for p in _up.path.split("/") if p]
+                        if len(_pp) != 1 or _pp[0].lower() != slug.lower():
+                            continue
+                        name = await link_el.evaluate(
+                            "e => (e.innerText || '').replace(/\\s+/g, ' ').trim()"
+                        )
+                        if not name or len(name) < 2 or name[0].isdigit():
+                            continue
+                        in_cmt = await link_el.evaluate(
+                            "e => !!e.closest('[role=\"article\"]') || !!e.closest('[aria-label*=\"ụng\"]')"
+                        )
+                        if in_cmt:
+                            continue
+                        uid = extract_user_id(href) or None
+                        return uid, name
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"Author slug fallback error: {e}")
+
+        # Fallback cuối: parse h2 text "Bài viết của {PageName}" / "Posts by {PageName}"
+        try:
+            result = await fallback_page.evaluate("""() => {
+                const PREFIXES = ['Bài viết của ', 'Posts by ', 'Post by '];
+                for (const h2 of document.querySelectorAll('h2')) {
+                    const text = (h2.innerText || '').replace(/\\s+/g, ' ').trim();
+                    for (const p of PREFIXES) {
+                        if (text.startsWith(p)) {
+                            const name = text.slice(p.length).trim();
+                            if (name && name.length > 1) return name;
+                        }
+                    }
+                }
+                return null;
+            }""")
+            if result:
+                return None, result
+        except Exception:
+            pass
+
         return None, None
 
     async def _extract_timestamp_from(self, root, fallback_page):
@@ -731,16 +785,17 @@ class PostExtractor:
 
     async def _extract_page_author(self, page: Page):
         try:
-            # Look for the post author link
             author_link = await page.query_selector(
-                'h2 a[href*="facebook.com"], '
+                'h2 a[href*="facebook.com"], h2 a[href^="/"], '
                 '[data-testid="actor-name"] a, '
                 'strong a[href*="facebook.com"]'
             )
             if author_link:
                 name = await author_link.inner_text()
-                href = await author_link.get_attribute("href")
-                uid = extract_user_id(href or "") or ""
+                href = await author_link.evaluate("e => e.href || e.getAttribute('href') || ''")
+                if href and href.startswith("/"):
+                    href = "https://www.facebook.com" + href
+                uid = extract_user_id(href) or None
                 return uid, name.strip()
         except Exception:
             pass
@@ -868,7 +923,7 @@ class PostExtractor:
     async def _get_reactions_from_html(self, page: Page, post_id: str = "") -> Dict[str, int]:
         """
         Parse reaction counts từ FB embedded JSON (HTML source).
-        Dùng page.url làm anchor để scope đúng post, tránh lấy nhầm background feed.
+        Dùng story_fbid từ og:url để anchor vào đúng JSON block của post này.
         """
         reactions = {
             "like_count": 0, "love_count": 0, "haha_count": 0,
@@ -882,20 +937,43 @@ class PostExtractor:
         try:
             html = await page.content()
 
-            # top_reactions: {"reaction_type":"LIKE",...,"count":N}
+            # Lấy story_fbid từ og:url để tìm đúng JSON block
+            story_fbid = await page.evaluate("""() => {
+                const m = document.querySelector('meta[property="og:url"]');
+                if (!m) return '';
+                const u = m.getAttribute('content') || '';
+                const r = u.match(/story_fbid=([0-9]+)/);
+                if (r) return r[1];
+                const r2 = u.match(/\\/posts\\/([0-9]+)/);
+                return r2 ? r2[1] : '';
+            }""")
+
+            anchor = story_fbid or post_id
+            search_window = html
+
+            if anchor:
+                # Tìm vị trí anchor trong HTML (đây là ID của post hiện tại)
+                idx = html.find(f'"{anchor}"')
+                if idx < 0:
+                    idx = html.find(anchor)
+                if idx > 0:
+                    # Search trong window xung quanh anchor (±5KB trước + 30KB sau)
+                    search_window = html[max(0, idx - 5000):idx + 30000]
+
+            # top_reactions: JSON object dạng {"reaction_type":"LIKE","count":N,...}
+            # Dùng regex chặt hơn — match trong cùng 1 JSON object (không span qua objects)
             for m in re.finditer(
-                r'"reaction_type"\s*:\s*"([A-Z]+)"[\s\S]{0,300}?"count"\s*:\s*(\d+)',
-                html
+                r'\{[^{}]{0,200}"reaction_type"\s*:\s*"([A-Z]+)"[^{}]{0,200}"count"\s*:\s*(\d+)[^{}]{0,200}\}',
+                search_window
             ):
                 rtype, count = m.group(1), int(m.group(2))
                 key = REACTION_TYPE_MAP.get(rtype)
                 if key and reactions[key] == 0:
                     reactions[key] = count
 
-            # Total reaction_count: FIRST occurrence in HTML = current foreground post
-            # (FB embeds current post data trước related/background posts)
-            if reactions["like_count"] == 0:
-                m = re.search(r'"reaction_count"\s*:\s*\{\s*"count"\s*:\s*(\d+)', html)
+            # Total reaction_count fallback
+            if all(v == 0 for v in reactions.values()):
+                m = re.search(r'"reaction_count"\s*:\s*\{\s*"count"\s*:\s*(\d+)', search_window)
                 if m:
                     reactions["like_count"] = int(m.group(1))
 
@@ -982,8 +1060,9 @@ class PostExtractor:
                 "Phẫn nộ":     "angry_count",
                 "Thương thương":"care_count",
             }
-            # Scope: tìm trong foreground container trước, fallback toàn page
-            search_roots = ([scoped_root, page] if scoped_root else [page])
+            # Nếu có scoped_root thì CHỈ tìm trong đó — không fallback toàn page
+            # (tránh lấy nhầm reactions từ background feed portals)
+            search_roots = [scoped_root] if scoped_root else [page]
             for vn_name, key in VN_REACTION_MAP.items():
                 try:
                     for root in search_roots:

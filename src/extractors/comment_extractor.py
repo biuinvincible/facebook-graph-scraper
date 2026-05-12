@@ -229,6 +229,7 @@ class CommentExtractor:
         Sau khi expand tất cả reply buttons, collect replies trên full page.
         Replies render như React portals ngoài foreground container → không dùng scoped root.
         Chỉ lấy elements chưa có trong seen_ids để tránh duplicate.
+        Xác định parent_id bằng cách match aria-label của reply với author_name của top-level comments.
         """
         REPLY_SELS = (
             'div[aria-label*="Bình luận dưới tên"], '
@@ -238,30 +239,158 @@ class CommentExtractor:
             'div[aria-label*="Reply by"], '
             'div[aria-label*="Replied to"]'
         )
+
+        # Build lookup: author_name → comment_id của top-level comments đã collect
+        parent_name_map: dict = {}
+        for c in comments:
+            if c.parent_id is None and c.author_name and c.comment_id not in parent_name_map.values():
+                parent_name_map.setdefault(c.author_name, c.comment_id)
+
+        # Content-based dedup: (author_id + text[:60]) — tránh duplicate khi ID hash lệch
+        seen_content: set = set()
+        for c in comments:
+            key = f"{c.author_id or c.author_name}:{(c.raw_text or '').strip()[:60]}"
+            seen_content.add(key)
+
         try:
-            all_els = await page.query_selector_all(REPLY_SELS)
+            # 1 JS call để extract toàn bộ data — tránh hàng nghìn round-trips
+            raw_items = await page.evaluate("""(sels) => {
+                function getText(el) {
+                    let r = '';
+                    for (const n of el.childNodes) {
+                        if (n.nodeType === 3) r += n.textContent;
+                        else if (n.nodeType === 1) {
+                            if (n.tagName === 'IMG') r += n.getAttribute('alt') || '';
+                            else r += getText(n);
+                        }
+                    }
+                    return r;
+                }
+                const results = [];
+                for (const sel of sels) {
+                    for (const el of document.querySelectorAll(sel)) {
+                        const aria = el.getAttribute('aria-label') || '';
+                        // Author
+                        let authorName = '', authorHref = '';
+                        const authorSels = [
+                            'span > a[role="link"] > span > span[dir="auto"]',
+                            'a[href*="/user/"] span', 'a[href*="/profile.php"] span',
+                            'a[role="link"][href]', 'a[href]',
+                        ];
+                        for (const as of authorSels) {
+                            const ae = el.querySelector(as);
+                            if (ae && ae.innerText.trim()) {
+                                authorName = ae.innerText.trim();
+                                const link = ae.closest('a') || ae;
+                                authorHref = link.href || link.getAttribute('href') || '';
+                                break;
+                            }
+                        }
+                        if (!authorHref || !authorHref.includes('facebook.com/')) continue;
+                        // Text
+                        let text = '';
+                        const textSels = [
+                            'div[data-ad-preview="message"] > span',
+                            'div[data-ad-comet-preview="message"]',
+                            'div[dir="auto"][style*="text-align: start"]',
+                        ];
+                        for (const ts of textSels) {
+                            const te = el.querySelector(ts);
+                            if (te && te.innerText.trim()) { text = getText(te).trim(); break; }
+                        }
+                        if (!text) {
+                            for (const d of el.querySelectorAll('[dir="auto"]')) {
+                                if (d.closest('a')) continue;
+                                const t = getText(d).trim();
+                                if (t && t.length > 1) { text = t; break; }
+                            }
+                        }
+                        // Image urls
+                        const imgs = [...el.querySelectorAll('img[src*="fbcdn"]')]
+                            .map(i => i.src)
+                            .filter(s => !s.includes('t39.1997-6') && !s.includes('emoji'));
+                        // Numeric comment_id từ anchor link (khớp với _get_comment_id)
+                        let numericId = null;
+                        const anchor = el.querySelector('a[href*="comment_id"]');
+                        if (anchor) {
+                            const m = anchor.href.match(/comment_id[=:](\d+)/);
+                            if (m) numericId = m[1];
+                        }
+                        results.push({ aria, authorName, authorHref, text, imgs, numericId });
+                    }
+                }
+                return results;
+            }""", REPLY_SELS.split(', '))
+
             new_count = 0
             skip_count = 0
-            for el in all_els:
+            for item in raw_items:
                 try:
-                    comment = await self._extract_single_comment(el, post_id, None)
-                    if comment and comment.comment_id not in seen_ids:
-                        seen_ids.add(comment.comment_id)
-                        comments.append(comment)
-                        new_count += 1
-                        if comment.author_id:
-                            edges.append(UserCommentEdge(
-                                user_id=comment.author_id,
-                                comment_id=comment.comment_id,
-                                relation_type="author",
-                                timestamp=comment.timestamp,
-                            ))
+                    aria       = item['aria']
+                    author_href = item['authorHref']
+                    author_name = item['authorName']
+                    raw_text    = item['text']
+                    image_urls  = item['imgs']
+
+                    if not author_href:
+                        skip_count += 1; continue
+
+                    author_id = extract_user_id(author_href) or None
+
+                    # Content-based dedup
+                    content_key = f"{author_id or author_name}:{raw_text.strip()[:60]}"
+                    if content_key in seen_content:
+                        skip_count += 1; continue
+                    seen_content.add(content_key)
+
+                    # parent_id từ aria-label
+                    parent_id: Optional[str] = None
+                    m = re.search(r'Phản hồi bình luận của (.+?)\s+dưới tên', aria)
+                    if m:
+                        parent_id = parent_name_map.get(m.group(1).strip())
+                    if not parent_id:
+                        m = re.search(r"Replied to (.+?)'s comment", aria)
+                        if m:
+                            parent_id = parent_name_map.get(m.group(1).strip())
+
+                    # comment_id: dùng numeric ID từ URL nếu có (khớp với _get_comment_id)
+                    # fallback: hash(aria|author_href|text) — cùng công thức với _get_comment_id
+                    if item.get('numericId'):
+                        comment_id = item['numericId']
                     else:
-                        skip_count += 1
+                        key = f"{item['aria']}|{author_href}|{raw_text}"
+                        comment_id = f"cmt_{hash(key) & 0xFFFFFFFF:x}"
+
+                    if comment_id in seen_ids:
+                        skip_count += 1; continue
+
+                    seen_ids.add(comment_id)
+                    comment = CommentNode(
+                        comment_id=comment_id,
+                        post_id=post_id,
+                        parent_id=parent_id,
+                        depth=1 if parent_id else 0,
+                        author_id=author_id,
+                        author_name=author_name,
+                        raw_text=raw_text,
+                        cleaned_text=clean_text(raw_text),
+                        hashtags=extract_hashtags(raw_text),
+                        mentions=extract_mentions(raw_text),
+                        emojis=extract_emojis(raw_text),
+                        image_urls=image_urls,
+                    )
+                    comments.append(comment)
+                    new_count += 1
+                    if author_id:
+                        edges.append(UserCommentEdge(
+                            user_id=author_id,
+                            comment_id=comment_id,
+                            relation_type="author",
+                        ))
                 except Exception:
                     skip_count += 1
                     continue
-            logger.debug(f"collect_replies_fullpage: {len(all_els)} els, +{new_count} new, {skip_count} skipped/fail")
+            logger.debug(f"collect_replies_fullpage: {len(raw_items)} els, +{new_count} new, {skip_count} skipped/fail")
         except Exception as e:
             logger.debug(f"collect_replies_fullpage error: {e}")
 
@@ -274,35 +403,42 @@ class CommentExtractor:
         click mọi reply button visible ở mỗi bước.
         """
         center = await self._get_post_scroll_center(page)
-
-        # Tính số steps cần thiết dựa trên track height
-        track_height = await page.evaluate("""() => {
-            const thumbs = [...document.querySelectorAll('[data-thumb]')];
-            let best = 0;
-            for (const t of thumbs) best = Math.max(best, parseFloat(t.style.height || '0'));
-            return best;
-        }""")
-        viewport_h = await page.evaluate("() => window.innerHeight")
         scroll_px = 250
-        # Số bước = track_height / scroll_px, tối thiểu 20, tối đa 150
-        steps = max(20, min(150, int((track_height or 3000) / scroll_px) + 10))
-        logger.debug(f"expand_all_reply_buttons: track={track_height:.0f}px steps={steps}")
 
         # Scroll về đầu comment section
         if center:
             await page.mouse.move(center['cx'], center['cy'])
-            for _ in range(40):  # cuộn lên tận cùng
+            for _ in range(40):
                 await page.mouse.wheel(0, -600)
             await asyncio.sleep(0.8)
 
-        # Scroll qua toàn bộ container, dùng page.mouse.click() (CDP, isTrusted=true)
-        # JS btn.click() có isTrusted=false → Facebook block GraphQL fetch
-        # Dùng JS để lấy tọa độ (1 call/step), sau đó CDP click từng button
+        # Scroll + click động: không dùng fixed steps.
+        # Tiếp tục cho đến khi không còn reply button nào mới trong `no_new_streak` bước liên tiếp
+        # VÀ đã scroll qua hết toàn bộ content (track height hiện tại).
+        import time as _time
         clicked_total = 0
-        seen_btn_keys = set()
+        seen_btn_keys: set = set()
+        last_progress = _time.monotonic()
+        IDLE_TIMEOUT  = 6    # dừng sau 6s không có progress (không click + đang ở đáy)
+        MAX_STEPS     = 2000  # safety cap tuyệt đối
 
-        for step in range(steps):
-            # 1 JS call để lấy tất cả visible reply buttons + tọa độ
+        for step in range(MAX_STEPS):
+            scroll_info = await page.evaluate("""() => {
+                const thumbs = [...document.querySelectorAll('[data-thumb]')];
+                let best = null, bestH = 0;
+                for (const t of thumbs) {
+                    const h = parseFloat(t.style.height || '0');
+                    if (h > bestH) { bestH = h; best = t; }
+                }
+                if (!best) return {atBottom: true, scrollTop: 0};
+                const c = best.parentElement;
+                return {
+                    atBottom: c.scrollTop + c.clientHeight >= c.scrollHeight - 50,
+                    scrollTop: c.scrollTop,
+                };
+            }""")
+            at_bottom = scroll_info.get('atBottom', True)
+
             btn_list = await page.evaluate("""() => {
                 const vp = window.innerHeight;
                 const result = [];
@@ -321,16 +457,17 @@ class CommentExtractor:
                 return result;
             }""")
 
+            clicked_this_step = 0
             for b in btn_list:
+                # Key gồm cả Y để phân biệt các buttons khác nhau trong cùng cột
+                # Khi DOM shift sau click, Y thay đổi → key mới → button được xử lý lại (đúng)
                 key = f"{b['text']}|{b['x']:.0f}|{b['y']:.0f}"
                 if key in seen_btn_keys:
                     continue
                 seen_btn_keys.add(key)
-                # CDP click via locator at coordinates = isTrusted=true
                 try:
                     await page.mouse.move(b['x'], b['y'])
                     await asyncio.sleep(0.08)
-                    # Verify element still at position before clicking
                     still_there = await page.evaluate("""([x, y]) => {
                         const el = document.elementFromPoint(x, y);
                         if (!el) return false;
@@ -344,15 +481,27 @@ class CommentExtractor:
                         await page.mouse.click(b['x'], b['y'])
                         await asyncio.sleep(1.5)
                         clicked_total += 1
+                        clicked_this_step += 1
+                    else:
+                        # DOM đã shift sau click trước → discard để thử lại bước sau
+                        seen_btn_keys.discard(key)
                 except Exception:
+                    seen_btn_keys.discard(key)
                     continue
+
+            # Progress = vừa click được button mới HOẶC chưa đến đáy (còn content)
+            if clicked_this_step > 0 or not at_bottom:
+                last_progress = _time.monotonic()
+            elif _time.monotonic() - last_progress > IDLE_TIMEOUT:
+                # Đang ở đáy + không click gì trong IDLE_TIMEOUT giây → hết content
+                break
 
             if center:
                 await page.mouse.move(center['cx'], center['cy'])
             await page.mouse.wheel(0, scroll_px)
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.05)
 
-        logger.debug(f"expand_all_reply_buttons: {clicked_total} CDP clicks total")
+        logger.debug(f"expand_all_reply_buttons: {clicked_total} CDP clicks in {step+1} steps")
 
     async def _collect_batch(
         self, page: Page, post_id: str, seen_ids: set,
@@ -663,14 +812,12 @@ class CommentExtractor:
         try:
             root, is_photo = await self._get_comment_root(page)
 
+            # Chỉ lấy TOP-LEVEL comments — replies để _collect_replies_fullpage xử lý
+            # (tránh collect reply với parent_id=None rồi content dedup chặn _collect_replies_fullpage)
             COMMENT_SELS = (
                 'div[aria-label*="Comment by"], '
                 'div[aria-label*="Bình luận của"], '
                 'div[aria-label*="Bình luận dưới tên"], '
-                'div[aria-label*="Phản hồi bình luận của"], '
-                'div[aria-label*="Phản hồi của"], '
-                'div[aria-label*="Reply by"], '
-                'div[aria-label*="Replied to"], '
                 'ul > li div[role="article"]'
             )
 

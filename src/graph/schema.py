@@ -313,6 +313,8 @@ class GraphSample:
                 "author_name": post.author_name,
                 "neighbors": neighbors,
                 "comment_tree": comment_tree,
+                "edges_user_post": [e.to_dict() for e in self.edges_user_post],
+                "edges_user_comment": [e.to_dict() for e in self.edges_user_comment],
                 "edges_user_user": [e.to_dict() for e in self.edges_user_user],
                 "edges_post_post": [e.to_dict() for e in self.edges_post_post],
             },
