@@ -249,13 +249,9 @@ class PageScraper(BaseScraper):
                 ))
 
             if comment.author_id:
-                # User → Post (comment edge)
-                sample.edges_user_post.append(UserPostEdge(
-                    user_id=comment.author_id,
-                    post_id=post.post_id,
-                    interaction_type="comment",
-                    timestamp=comment.timestamp,
-                ))
+                # NOTE: Không có User→[comment]→Post trực tiếp nữa.
+                # GNN học quan hệ này qua 2-hop: User→[author]→Comment→[reply_to]→Post
+                # Giữ lại User→[author]→Post chỉ cho page/post author (interaction_type="author")
 
                 # Reply edge: commenter → parent commenter (User → User)
                 if comment.parent_id:
@@ -339,29 +335,15 @@ class PageScraper(BaseScraper):
                     timestamp=comment.timestamp,
                 ))
 
-        # ── React edges: User→[react:type]→ Post (từ aggregated reaction counts) ─
-        # Ghi nhận tổng reactions theo type như edge attributes trên Post node
-        # (Individual user react không thu thập được, chỉ lưu aggregated)
+        # ── React edges ───────────────────────────────────────────────────────
+        # Aggregated post reactions (like/haha/sad...) → node features của Post
+        # không tạo edge vì không có per-user data → tránh "fake" edges với agg_ user_id
+        # ReactEdge chỉ dùng khi có user_id thực sự (comment reactions)
         from ..graph.schema import ReactEdge
-        REACT_TYPES = {
-            "like": post.like_count, "love": post.love_count,
-            "haha": post.haha_count, "wow": post.wow_count,
-            "sad": post.sad_count,   "angry": post.angry_count,
-            "care": post.care_count,
-        }
-        for rtype, count in REACT_TYPES.items():
-            if count and count > 0:
-                # Tạo 1 "aggregate react edge" mang count như edge attribute
-                sample.edges_react.append(ReactEdge(
-                    user_id=f"agg_{rtype}",  # aggregated, không phải user cụ thể
-                    target_id=post.post_id,
-                    target_type="post",
-                    react_type=rtype,
-                ))
-
-        # Comment individual reactions (nếu có)
         for comment in comments:
             if comment.reaction_type and comment.author_id:
+                # Tách thành separate edge type: react_like, react_haha, etc.
+                # → HAN sẽ học ma trận trọng số riêng cho từng loại cảm xúc
                 sample.edges_react.append(ReactEdge(
                     user_id=comment.author_id,
                     target_id=comment.comment_id,
