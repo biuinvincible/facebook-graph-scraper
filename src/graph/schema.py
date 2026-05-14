@@ -189,6 +189,46 @@ class UserUserEdge:
 
 
 @dataclass
+class TextNode:
+    """Text modality node — nội dung văn bản của Post hoặc Comment"""
+    text_id: str          # f"text_{post_id}" hoặc f"text_{comment_id}"
+    content: str
+    source_id: str        # post_id hoặc comment_id
+    source_type: str      # "post" | "comment"
+    node_type: str = "text"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class ImageNode:
+    """Image modality node — hình ảnh của Post hoặc Comment"""
+    image_id: str         # f"img_{source_id}_{idx}"
+    url: str
+    local_path: Optional[str] = None
+    source_id: str = ""   # post_id hoặc comment_id
+    source_type: str = "" # "post" | "comment"
+    node_type: str = "image"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class ContainEdge:
+    """Post/Comment -[contain]→ Text/Image (modality edge)"""
+    source_id: str = ""   # post_id hoặc comment_id
+    source_type: str = "" # "post" | "comment"
+    target_id: str = ""   # text_id hoặc image_id
+    target_type: str = "" # "text" | "image"
+    edge_type: str = "contain"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
 class HashtagNode:
     """Concept/Hashtag node — cầu nối giữa các posts cùng chủ đề"""
     hashtag: str
@@ -259,6 +299,8 @@ class GraphSample:
 
     # Neighbor nodes
     hashtags: List["HashtagNode"] = field(default_factory=list)
+    text_nodes: List["TextNode"] = field(default_factory=list)
+    image_nodes: List["ImageNode"] = field(default_factory=list)
 
     # Edges
     edges_user_post: List[UserPostEdge] = field(default_factory=list)
@@ -266,6 +308,7 @@ class GraphSample:
     edges_post_post: List[PostPostEdge] = field(default_factory=list)
     edges_user_comment: List[UserCommentEdge] = field(default_factory=list)
     edges_post_hashtag: List["PostHashtagEdge"] = field(default_factory=list)
+    edges_contain: List["ContainEdge"] = field(default_factory=list)
 
     # Metadata
     scraped_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -351,6 +394,9 @@ class GraphSample:
                 "neighbors": neighbors,
                 "comment_tree": comment_tree,
                 "hashtag_nodes": [h.to_dict() for h in self.hashtags],
+                "text_nodes": [t.to_dict() for t in self.text_nodes],
+                "image_nodes": [i.to_dict() for i in self.image_nodes],
+                "edges_contain": [e.to_dict() for e in self.edges_contain],
                 "edges_user_post": [e.to_dict() for e in self.edges_user_post],
                 "edges_user_comment": [e.to_dict() for e in self.edges_user_comment],
                 "edges_user_user": [e.to_dict() for e in self.edges_user_user],

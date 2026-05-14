@@ -8,7 +8,7 @@ from playwright.async_api import BrowserContext
 from loguru import logger
 
 from .base import BaseScraper
-from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge
+from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge, TextNode, ImageNode, ContainEdge
 from ..extractors.post_extractor import PostExtractor
 from ..extractors.comment_extractor import CommentExtractor
 from ..extractors.media_extractor import MediaExtractor
@@ -350,6 +350,46 @@ class PageScraper(BaseScraper):
                         timestamp=ci.timestamp,
                         edge_weight=weight,
                     ))
+
+        # ── Text/Image modality nodes + contain edges ─────────────────────────
+        # Post text
+        if post.raw_text:
+            tn = TextNode(text_id=f"text_{post.post_id}", content=post.raw_text,
+                          source_id=post.post_id, source_type="post")
+            sample.text_nodes.append(tn)
+            sample.edges_contain.append(ContainEdge(
+                source_id=post.post_id, source_type="post",
+                target_id=tn.text_id, target_type="text"))
+
+        # Post images
+        for idx, url in enumerate(post.image_urls or []):
+            local = post.local_image_paths[idx] if idx < len(post.local_image_paths or []) else None
+            img_id = f"img_{post.post_id}_{idx}"
+            in_ = ImageNode(image_id=img_id, url=url, local_path=local,
+                            source_id=post.post_id, source_type="post")
+            sample.image_nodes.append(in_)
+            sample.edges_contain.append(ContainEdge(
+                source_id=post.post_id, source_type="post",
+                target_id=img_id, target_type="image"))
+
+        # Comment text + images
+        for comment in comments:
+            if comment.raw_text:
+                ctn = TextNode(text_id=f"text_{comment.comment_id}", content=comment.raw_text,
+                               source_id=comment.comment_id, source_type="comment")
+                sample.text_nodes.append(ctn)
+                sample.edges_contain.append(ContainEdge(
+                    source_id=comment.comment_id, source_type="comment",
+                    target_id=ctn.text_id, target_type="text"))
+            for idx, url in enumerate(comment.image_urls or []):
+                local = comment.local_image_paths[idx] if idx < len(comment.local_image_paths or []) else None
+                img_id = f"img_{comment.comment_id}_{idx}"
+                cin = ImageNode(image_id=img_id, url=url, local_path=local,
+                                source_id=comment.comment_id, source_type="comment")
+                sample.image_nodes.append(cin)
+                sample.edges_contain.append(ContainEdge(
+                    source_id=comment.comment_id, source_type="comment",
+                    target_id=img_id, target_type="image"))
 
         # ── Hashtag nodes + Post→Hashtag edges ───────────────────────────────
         from ..graph.schema import HashtagNode, PostHashtagEdge
