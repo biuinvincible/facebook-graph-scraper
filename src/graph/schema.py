@@ -188,41 +188,29 @@ class UserUserEdge:
         return {k: v for k, v in self.__dict__.items()}
 
 
+
 @dataclass
-class TextNode:
-    """Text modality node — nội dung văn bản của Post hoặc Comment"""
-    text_id: str          # f"text_{post_id}" hoặc f"text_{comment_id}"
-    content: str
-    source_id: str        # post_id hoặc comment_id
-    source_type: str      # "post" | "comment"
-    node_type: str = "text"
+class ReactEdge:
+    """User →[react: type]→ Post/Comment — thái độ cộng đồng (like/haha/sad/angry/care)"""
+    user_id: str = ""
+    target_id: str = ""       # post_id hoặc comment_id
+    target_type: str = "post" # "post" | "comment"
+    react_type: str = "like"  # like, love, haha, wow, sad, angry, care
+    edge_type: str = "react"
 
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
 
 
 @dataclass
-class ImageNode:
-    """Image modality node — hình ảnh của Post hoặc Comment"""
-    image_id: str         # f"img_{source_id}_{idx}"
-    url: str
-    local_path: Optional[str] = None
-    source_id: str = ""   # post_id hoặc comment_id
-    source_type: str = "" # "post" | "comment"
-    node_type: str = "image"
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items()}
-
-
-@dataclass
-class ContainEdge:
-    """Post/Comment -[contain]→ Text/Image (modality edge)"""
-    source_id: str = ""   # post_id hoặc comment_id
-    source_type: str = "" # "post" | "comment"
-    target_id: str = ""   # text_id hoặc image_id
-    target_type: str = "" # "text" | "image"
-    edge_type: str = "contain"
+class CommentReplyEdge:
+    """Comment →[reply_to]→ Post/Comment — cấu trúc cây hội thoại (directed, có reverse)"""
+    comment_id: str = ""
+    target_id: str = ""       # post_id (top-level) hoặc comment_id (reply)
+    target_type: str = "post" # "post" | "comment"
+    direction: str = "reply_to"  # "reply_to" | "reply_to_rev"
+    timestamp: Optional[str] = None
+    edge_type: str = "comment_reply"
 
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
@@ -299,16 +287,15 @@ class GraphSample:
 
     # Neighbor nodes
     hashtags: List["HashtagNode"] = field(default_factory=list)
-    text_nodes: List["TextNode"] = field(default_factory=list)
-    image_nodes: List["ImageNode"] = field(default_factory=list)
 
     # Edges
     edges_user_post: List[UserPostEdge] = field(default_factory=list)
     edges_user_user: List[UserUserEdge] = field(default_factory=list)
-    edges_post_post: List[PostPostEdge] = field(default_factory=list)
     edges_user_comment: List[UserCommentEdge] = field(default_factory=list)
+    edges_comment_reply: List["CommentReplyEdge"] = field(default_factory=list)
+    edges_react: List["ReactEdge"] = field(default_factory=list)
     edges_post_hashtag: List["PostHashtagEdge"] = field(default_factory=list)
-    edges_contain: List["ContainEdge"] = field(default_factory=list)
+    edges_post_post: List[PostPostEdge] = field(default_factory=list)
 
     # Metadata
     scraped_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -394,12 +381,11 @@ class GraphSample:
                 "neighbors": neighbors,
                 "comment_tree": comment_tree,
                 "hashtag_nodes": [h.to_dict() for h in self.hashtags],
-                "text_nodes": [t.to_dict() for t in self.text_nodes],
-                "image_nodes": [i.to_dict() for i in self.image_nodes],
-                "edges_contain": [e.to_dict() for e in self.edges_contain],
                 "edges_user_post": [e.to_dict() for e in self.edges_user_post],
                 "edges_user_comment": [e.to_dict() for e in self.edges_user_comment],
                 "edges_user_user": [e.to_dict() for e in self.edges_user_user],
+                "edges_comment_reply": [e.to_dict() for e in self.edges_comment_reply],
+                "edges_react": [e.to_dict() for e in self.edges_react],
                 "edges_post_hashtag": [e.to_dict() for e in self.edges_post_hashtag],
                 "edges_post_post": [e.to_dict() for e in self.edges_post_post],
             },

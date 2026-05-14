@@ -8,7 +8,7 @@ from playwright.async_api import BrowserContext
 from loguru import logger
 
 from .base import BaseScraper
-from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge, TextNode, ImageNode, ContainEdge
+from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge, CommentReplyEdge, ReactEdge
 from ..extractors.post_extractor import PostExtractor
 from ..extractors.comment_extractor import CommentExtractor
 from ..extractors.media_extractor import MediaExtractor
@@ -295,8 +295,7 @@ class PageScraper(BaseScraper):
                     relation_type="mention",
                 ))
 
-        # ── Bidirectional reversed edges ──────────────────────────────────────
-        # Thêm chiều ngược lại cho reply/mention để GNN có full context
+        # ── Bidirectional reversed edges (mention/reply) ──────────────────────
         reversed_edges = []
         for e in sample.edges_user_user:
             if e.relation_type in ("reply", "mention"):
@@ -308,88 +307,73 @@ class PageScraper(BaseScraper):
                         target_user_id=e.source_user_id,
                         relation_type=f"{e.relation_type}_rev",
                         timestamp=e.timestamp,
-                        edge_weight=e.edge_weight,
                     ))
         sample.edges_user_user.extend(reversed_edges)
 
-        # ── Co-occurrence edges ───────────────────────────────────────────────
-        # User→User khi 2 users comment trong cùng thread trong vòng 5 phút
-        from datetime import datetime, timezone
-        import math
-
-        def _ts_to_epoch(ts: str) -> float:
-            try:
-                return datetime.fromisoformat(ts).timestamp()
-            except Exception:
-                return 0.0
-
-        CO_WINDOW = 300  # 5 phút
-        TAU = 3600       # hằng số time-decay (1 giờ)
-
-        # Chỉ xét top-level comments để tránh bùng nổ edges
-        top_cmts = [c for c in comments if c.parent_id is None and c.author_id and c.timestamp]
-        for i, ci in enumerate(top_cmts):
-            t_i = _ts_to_epoch(ci.timestamp)
-            for cj in top_cmts[i+1:]:
-                if ci.author_id == cj.author_id:
-                    continue
-                t_j = _ts_to_epoch(cj.timestamp)
-                delta = abs(t_i - t_j)
-                if delta > CO_WINDOW:
-                    continue
-                key = tuple(sorted([ci.author_id, cj.author_id])) + ("co_occur",)
-                if key in seen_uu_edges:
-                    continue
-                seen_uu_edges.add(key)
-                weight = round(math.exp(-delta / TAU), 4)
-                for src, tgt in [(ci.author_id, cj.author_id), (cj.author_id, ci.author_id)]:
-                    sample.edges_user_user.append(UserUserEdge(
-                        source_user_id=src,
-                        target_user_id=tgt,
-                        relation_type="co_occur",
-                        timestamp=ci.timestamp,
-                        edge_weight=weight,
-                    ))
-
-        # ── Text/Image modality nodes + contain edges ─────────────────────────
-        # Post text
-        if post.raw_text:
-            tn = TextNode(text_id=f"text_{post.post_id}", content=post.raw_text,
-                          source_id=post.post_id, source_type="post")
-            sample.text_nodes.append(tn)
-            sample.edges_contain.append(ContainEdge(
-                source_id=post.post_id, source_type="post",
-                target_id=tn.text_id, target_type="text"))
-
-        # Post images
-        for idx, url in enumerate(post.image_urls or []):
-            local = post.local_image_paths[idx] if idx < len(post.local_image_paths or []) else None
-            img_id = f"img_{post.post_id}_{idx}"
-            in_ = ImageNode(image_id=img_id, url=url, local_path=local,
-                            source_id=post.post_id, source_type="post")
-            sample.image_nodes.append(in_)
-            sample.edges_contain.append(ContainEdge(
-                source_id=post.post_id, source_type="post",
-                target_id=img_id, target_type="image"))
-
-        # Comment text + images
+        # ── Comment→[reply_to]→ Post/Comment (directed conversation tree) ─────
+        from ..graph.schema import CommentReplyEdge
         for comment in comments:
-            if comment.raw_text:
-                ctn = TextNode(text_id=f"text_{comment.comment_id}", content=comment.raw_text,
-                               source_id=comment.comment_id, source_type="comment")
-                sample.text_nodes.append(ctn)
-                sample.edges_contain.append(ContainEdge(
-                    source_id=comment.comment_id, source_type="comment",
-                    target_id=ctn.text_id, target_type="text"))
-            for idx, url in enumerate(comment.image_urls or []):
-                local = comment.local_image_paths[idx] if idx < len(comment.local_image_paths or []) else None
-                img_id = f"img_{comment.comment_id}_{idx}"
-                cin = ImageNode(image_id=img_id, url=url, local_path=local,
-                                source_id=comment.comment_id, source_type="comment")
-                sample.image_nodes.append(cin)
-                sample.edges_contain.append(ContainEdge(
-                    source_id=comment.comment_id, source_type="comment",
-                    target_id=img_id, target_type="image"))
+            if comment.parent_id:
+                # reply to another comment
+                sample.edges_comment_reply.append(CommentReplyEdge(
+                    comment_id=comment.comment_id,
+                    target_id=comment.parent_id,
+                    target_type="comment",
+                    direction="reply_to",
+                    timestamp=comment.timestamp,
+                ))
+                sample.edges_comment_reply.append(CommentReplyEdge(
+                    comment_id=comment.parent_id,
+                    target_id=comment.comment_id,
+                    target_type="comment",
+                    direction="reply_to_rev",
+                    timestamp=comment.timestamp,
+                ))
+            else:
+                # top-level: comment → post
+                sample.edges_comment_reply.append(CommentReplyEdge(
+                    comment_id=comment.comment_id,
+                    target_id=post.post_id,
+                    target_type="post",
+                    direction="reply_to",
+                    timestamp=comment.timestamp,
+                ))
+
+        # ── React edges: User→[react:type]→ Post (từ aggregated reaction counts) ─
+        # Ghi nhận tổng reactions theo type như edge attributes trên Post node
+        # (Individual user react không thu thập được, chỉ lưu aggregated)
+        from ..graph.schema import ReactEdge
+        REACT_TYPES = {
+            "like": post.like_count, "love": post.love_count,
+            "haha": post.haha_count, "wow": post.wow_count,
+            "sad": post.sad_count,   "angry": post.angry_count,
+            "care": post.care_count,
+        }
+        for rtype, count in REACT_TYPES.items():
+            if count and count > 0:
+                # Tạo 1 "aggregate react edge" mang count như edge attribute
+                sample.edges_react.append(ReactEdge(
+                    user_id=f"agg_{rtype}",  # aggregated, không phải user cụ thể
+                    target_id=post.post_id,
+                    target_type="post",
+                    react_type=rtype,
+                ))
+
+        # Comment individual reactions (nếu có)
+        for comment in comments:
+            if comment.reaction_type and comment.author_id:
+                sample.edges_react.append(ReactEdge(
+                    user_id=comment.author_id,
+                    target_id=comment.comment_id,
+                    target_type="comment",
+                    react_type=comment.reaction_type,
+                ))
+
+        # ── (Removed) Text/Image nodes → now stored as node features ─────────
+        # Text/Image được embed offline thành node features của Post/Comment
+        # không tạo node riêng để tránh node explosion O(N)
+        # See: step 4&5 - offline BLIP-2/DINOv2 embedding pipeline
+
 
         # ── Hashtag nodes + Post→Hashtag edges ───────────────────────────────
         from ..graph.schema import HashtagNode, PostHashtagEdge
