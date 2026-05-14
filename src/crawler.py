@@ -312,7 +312,12 @@ class FacebookCrawler:
             if post:
                 post = await me.process_post_media(post)
                 comments, comment_edges = await ce.extract_all_comments(page, post.post_id)
-                sample = scraper._build_sample(post, None, comments, comment_edges)
+                from .graph.schema import UserNode
+                author_node = UserNode(
+                    user_id=post.author_id or "",
+                    display_name=post.author_name or "",
+                ) if post.author_id else None
+                sample = scraper._build_sample(post, author_node, comments, comment_edges)
                 await handle_sample(sample)
 
         logger.info(f"Target done: {count} new posts scraped | type={target_type}")

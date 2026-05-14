@@ -161,9 +161,10 @@ class UserUserEdge:
     """User ↔ User social connection edge"""
     source_user_id: str = ""
     target_user_id: str = ""
-    relation_type: str = "follow"   # follow, friend, mention, reply, tag
+    relation_type: str = "follow"   # follow, friend, mention, reply, tag, co_occur
     is_mutual: bool = False
     timestamp: Optional[str] = None
+    edge_weight: float = 1.0        # time-decay weight: exp(-|t_i - t_j| / τ)
     edge_type: str = "user_user"
 
     @property
@@ -182,6 +183,30 @@ class UserUserEdge:
             "timestamp": self.timestamp,
             "edge_type": self.edge_type,
         }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class HashtagNode:
+    """Concept/Hashtag node — cầu nối giữa các posts cùng chủ đề"""
+    hashtag: str
+    frequency: int = 0
+    post_ids: List[str] = field(default_factory=list)
+    node_type: str = "hashtag"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class PostHashtagEdge:
+    """Post ↔ Hashtag edge (bidirectional: has_hashtag / in_post)"""
+    post_id: str = ""
+    hashtag: str = ""
+    direction: str = "has_hashtag"   # has_hashtag | in_post
+    edge_type: str = "post_hashtag"
 
     def to_dict(self) -> Dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
@@ -232,11 +257,15 @@ class GraphSample:
     commenters: List[UserNode] = field(default_factory=list)
     comments: List[CommentNode] = field(default_factory=list)
 
+    # Neighbor nodes
+    hashtags: List["HashtagNode"] = field(default_factory=list)
+
     # Edges
     edges_user_post: List[UserPostEdge] = field(default_factory=list)
     edges_user_user: List[UserUserEdge] = field(default_factory=list)
     edges_post_post: List[PostPostEdge] = field(default_factory=list)
     edges_user_comment: List[UserCommentEdge] = field(default_factory=list)
+    edges_post_hashtag: List["PostHashtagEdge"] = field(default_factory=list)
 
     # Metadata
     scraped_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -321,9 +350,11 @@ class GraphSample:
                 "author_name": post.author_name,
                 "neighbors": neighbors,
                 "comment_tree": comment_tree,
+                "hashtag_nodes": [h.to_dict() for h in self.hashtags],
                 "edges_user_post": [e.to_dict() for e in self.edges_user_post],
                 "edges_user_comment": [e.to_dict() for e in self.edges_user_comment],
                 "edges_user_user": [e.to_dict() for e in self.edges_user_user],
+                "edges_post_hashtag": [e.to_dict() for e in self.edges_post_hashtag],
                 "edges_post_post": [e.to_dict() for e in self.edges_post_post],
             },
 

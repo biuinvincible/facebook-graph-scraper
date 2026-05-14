@@ -16,6 +16,28 @@ from ..utils.helpers import (
 )
 
 
+def _parse_relative_time(text: str) -> Optional[str]:
+    """Parse VN relative time từ aria-label hoặc span text → ISO 8601."""
+    from datetime import datetime, timezone, timedelta
+    import re
+    # Extract "X đơn_vị" từ chuỗi bất kỳ
+    m = re.search(r'(\d+)\s*(giây|phút|giờ|ngày|tuần|tháng|năm)', text)
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    now = datetime.now(tz=timezone.utc)
+    delta_map = {
+        'giây': timedelta(seconds=n),
+        'phút': timedelta(minutes=n),
+        'giờ':  timedelta(hours=n),
+        'ngày': timedelta(days=n),
+        'tuần': timedelta(weeks=n),
+        'tháng':timedelta(days=n*30),
+        'năm':  timedelta(days=n*365),
+    }
+    return (now - delta_map[unit]).isoformat()
+
+
 class CommentExtractor:
     def __init__(self, config: Dict[str, Any]):
         self.cfg = config
@@ -317,7 +339,13 @@ class CommentExtractor:
                             const m = anchor.href.match(/comment_id[=:](\d+)/);
                             if (m) numericId = m[1];
                         }
-                        results.push({ aria, authorName, authorHref, text, imgs, numericId });
+                        // Relative timestamp từ span bên trong
+                        let relTime = '';
+                        for (const s of el.querySelectorAll('span, a[role="link"]')) {
+                            const t = (s.innerText || '').trim();
+                            if (/^(khoảng )?\d+ (giây|phút|giờ|ngày|tuần|tháng)/.test(t)) { relTime = t; break; }
+                        }
+                        results.push({ aria, authorName, authorHref, text, imgs, numericId, relTime });
                     }
                 }
                 return results;
@@ -370,6 +398,9 @@ class CommentExtractor:
                         skip_count += 1; continue
 
                     seen_ids.add(comment_id)
+                    # Parse timestamp từ relTime hoặc aria-label
+                    ts = (_parse_relative_time(item.get('relTime', '')) or
+                          _parse_relative_time(aria))
                     comment = CommentNode(
                         comment_id=comment_id,
                         post_id=post_id,
@@ -383,6 +414,7 @@ class CommentExtractor:
                         mentions=extract_mentions(raw_text),
                         emojis=extract_emojis(raw_text),
                         image_urls=image_urls,
+                        timestamp=ts,
                     )
                     comments.append(comment)
                     # Cập nhật parent_name_map ngay để các sub-replies phía sau có thể dùng
@@ -1181,18 +1213,30 @@ class CommentExtractor:
 
     async def _extract_comment_timestamp(self, el: ElementHandle) -> Optional[str]:
         try:
+            from datetime import datetime, timezone, timedelta
+            # 1. abbr[data-utime] (cũ, vẫn giữ)
             ts = await el.query_selector("abbr[data-utime]")
             if ts:
                 utime = await ts.get_attribute("data-utime")
                 if utime:
-                    from datetime import datetime, timezone
                     return datetime.fromtimestamp(int(utime), tz=timezone.utc).isoformat()
-                return await ts.get_attribute("title")
-            # Try aria-label on time link
-            time_link = await el.query_selector('a[aria-label]')
-            if time_link:
-                label = await time_link.get_attribute("aria-label")
-                return label
+
+            # 2. Lấy từ aria-label của article: "... vào X giờ/ngày/tuần trước"
+            aria = await el.get_attribute("aria-label") or ""
+            ts_iso = _parse_relative_time(aria)
+            if ts_iso:
+                return ts_iso
+
+            # 3. Span text dạng "X ngày" / "X giờ" bên trong element
+            span_text = await el.evaluate("""el => {
+                for (const s of el.querySelectorAll('span, a[role="link"]')) {
+                    const t = (s.innerText || '').trim();
+                    if (/^(khoảng )?\d+ (giây|phút|giờ|ngày|tuần|tháng)/.test(t)) return t;
+                }
+                return '';
+            }""")
+            if span_text:
+                return _parse_relative_time(span_text)
         except Exception:
             pass
         return None

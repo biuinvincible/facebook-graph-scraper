@@ -8,7 +8,7 @@ from playwright.async_api import BrowserContext
 from loguru import logger
 
 from .base import BaseScraper
-from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample
+from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge
 from ..extractors.post_extractor import PostExtractor
 from ..extractors.comment_extractor import CommentExtractor
 from ..extractors.media_extractor import MediaExtractor
@@ -35,100 +35,121 @@ class PageScraper(BaseScraper):
     async def scrape_page(self, page_url: str) -> AsyncIterator[GraphSample]:
         """
         Async generator that yields GraphSample objects as posts are scraped.
-        Usage: async for sample in scraper.scrape_page(url): ...
+        Strategy: collect post links from feed via JS, scroll để load thêm,
+        process từng link riêng biệt — tránh dedup issue của extract_from_element.
         """
-        page = await self.get_page()
+        from urllib.parse import urlparse
+        feed_page = await self.get_page()
         logger.info(f"Starting page scrape: {page_url}")
 
-        # Navigate to page
-        success = await self.navigate_safely(page, page_url)
+        success = await self.navigate_safely(feed_page, page_url)
         if not success:
             logger.error(f"Failed to navigate to {page_url}")
             return
 
-        await self.dismiss_popups(page)
-        await asyncio.sleep(2)
+        await self.dismiss_popups(feed_page)
+        await asyncio.sleep(5)  # chờ feed render lần đầu
 
-        # Get page author info
-        author = await self.user_extractor._extract(page, page_url)
+        # Extract page slug để filter chỉ lấy posts của page đó
+        _slug = urlparse(page_url).path.strip("/").split("/")[0]
+
+        def _collect_links(all_links: list, seen: set) -> list:
+            new = [l for l in all_links if l not in seen]
+            for l in new:
+                seen.add(l)
+            return new
+
+        JS_COLLECT = """
+            (slug) => {
+                const seen = new Set();
+                const result = [];
+                document.querySelectorAll('a[href]').forEach(a => {
+                    const h = a.href;
+                    if (!h || h.includes('/reel/') || h.includes('/videos/')) return;
+                    if (slug) {
+                        const low = h.toLowerCase();
+                        if (!low.includes('/' + slug + '/') && !low.includes('/' + slug + '?')) return;
+                    }
+                    if ((h.includes('/posts/') || h.includes('/permalink/') || h.includes('story_fbid='))
+                        && !h.includes('/groups/')) {
+                        const clean = h.split('?')[0];
+                        if (!seen.has(clean)) { seen.add(clean); result.push(clean); }
+                    }
+                });
+                return result;
+            }
+        """
 
         scraped = 0
-        seen_post_ids = set()
-        no_new_posts_count = 0
+        seen_urls: set = set()
+        no_new_streak = 0
+        MAX_NO_NEW = 8  # dừng sau 8 lần scroll không thấy link mới
 
         while scraped < self.max_posts:
-            # Find post elements in current viewport
-            post_elements = await page.query_selector_all(
-                '[role="article"][data-pagelet*="FeedUnit"], '
-                '[role="article"]:not([aria-label*="Comment"])'
-            )
+            # Scroll để load thêm posts
+            await feed_page.evaluate("window.scrollBy(0, 800)")
+            await asyncio.sleep(2.5)
 
-            new_this_round = 0
-            for el in post_elements:
+            links = await feed_page.evaluate(JS_COLLECT, _slug)
+            new_links = _collect_links(links, seen_urls)
+            logger.debug(f"Feed scroll: found {len(links)} links total, {len(new_links)} new")
+
+            if not new_links:
+                no_new_streak += 1
+                if no_new_streak >= MAX_NO_NEW:
+                    logger.info(f"No new post links after {MAX_NO_NEW} scrolls — stopping feed")
+                    break
+                continue
+            else:
+                no_new_streak = 0
+
+            # Process từng link mới
+            for url in new_links:
                 if scraped >= self.max_posts:
                     break
 
+                tab = await self.context.new_page()
                 try:
-                    # Quick extraction from feed element
-                    post = await self.post_extractor.extract_from_element(page, el, page_url)
-                    if not post or not post.post_id:
+                    # Extract post + comments trong cùng 1 tab
+                    post = await self.post_extractor.extract_from_url(tab, url)
+                    if not post or (not post.raw_text and not post.image_urls):
                         continue
 
-                    if post.post_id in seen_post_ids:
-                        continue
-
-                    seen_post_ids.add(post.post_id)
-
-                    # Set author info from page context
-                    if author and not post.author_id:
-                        post.author_id = author.user_id
-                        post.author_name = author.display_name
-
-                    # Get full post data by navigating to individual post
-                    if post.post_url and post.post_url != page_url:
-                        full_post = await self._get_full_post(post.post_url)
-                        if full_post:
-                            # Merge data (full post has more detail)
-                            post = self._merge_posts(post, full_post)
-
-                    # Download media & OCR
                     post = await self.media_extractor.process_post_media(post)
 
-                    # Scrape comments
-                    comments = []
-                    comment_edges = []
-                    if self.scrape_comments and post.post_url:
-                        comments, comment_edges = await self._get_post_comments(post)
+                    comments, comment_edges = [], []
+                    if self.scrape_comments:
+                        comments, comment_edges = await self.comment_extractor.extract_all_comments(
+                            tab, post.post_id
+                        )
+                        comments = [
+                            await self.media_extractor.process_comment_media(c, post.post_id)
+                            if c.image_urls else c
+                            for c in comments
+                        ]
 
-                    # Build graph sample
-                    sample = self._build_sample(post, author, comments, comment_edges)
+                    from ..graph.schema import UserNode
+                    author_node = UserNode(
+                        user_id=post.author_id or "",
+                        display_name=post.author_name or "",
+                    ) if post.author_id else None
 
+                    sample = self._build_sample(post, author_node, comments, comment_edges)
                     scraped += 1
-                    new_this_round += 1
                     logger.info(f"Scraped post {scraped}/{self.max_posts}: {post.post_id} | "
                                 f"{len(comments)} comments | {len(post.image_urls)} images")
-
                     yield sample
 
                     await human_delay(
-                        self.cfg.get("scraper", {}).get("min_delay", 1.5),
-                        self.cfg.get("scraper", {}).get("max_delay", 4.0),
+                        self.cfg.get("min_delay", 1.5),
+                        self.cfg.get("max_delay", 4.0),
                     )
 
                 except Exception as e:
-                    logger.warning(f"Post scraping error: {e}")
-                    continue
-
-            if new_this_round == 0:
-                no_new_posts_count += 1
-                if no_new_posts_count >= 3:
-                    logger.info("No new posts found after 3 scroll attempts — stopping")
-                    break
-            else:
-                no_new_posts_count = 0
-
-            # Scroll to load more posts
-            await self.scroll_and_load(page, target_items=scraped + 10, pause=2.5)
+                    logger.warning(f"Post scraping error ({url[:60]}): {e}")
+                finally:
+                    await tab.close()
+                    await asyncio.sleep(1)
 
         logger.info(f"Page scrape complete: {scraped} posts from {page_url}")
 
@@ -265,7 +286,7 @@ class PageScraper(BaseScraper):
                                 timestamp=comment.timestamp,
                             ))
 
-        # Mention edges from post text → User → Post author mentions
+        # Mention edges from post text
         for mention_slug in extract_mentions(post.raw_text or ""):
             if post.author_id:
                 sample.edges_user_user.append(UserUserEdge(
@@ -273,5 +294,88 @@ class PageScraper(BaseScraper):
                     target_user_id=mention_slug,
                     relation_type="mention",
                 ))
+
+        # ── Bidirectional reversed edges ──────────────────────────────────────
+        # Thêm chiều ngược lại cho reply/mention để GNN có full context
+        reversed_edges = []
+        for e in sample.edges_user_user:
+            if e.relation_type in ("reply", "mention"):
+                key = (e.target_user_id, e.source_user_id, f"{e.relation_type}_rev")
+                if key not in seen_uu_edges:
+                    seen_uu_edges.add(key)
+                    reversed_edges.append(UserUserEdge(
+                        source_user_id=e.target_user_id,
+                        target_user_id=e.source_user_id,
+                        relation_type=f"{e.relation_type}_rev",
+                        timestamp=e.timestamp,
+                        edge_weight=e.edge_weight,
+                    ))
+        sample.edges_user_user.extend(reversed_edges)
+
+        # ── Co-occurrence edges ───────────────────────────────────────────────
+        # User→User khi 2 users comment trong cùng thread trong vòng 5 phút
+        from datetime import datetime, timezone
+        import math
+
+        def _ts_to_epoch(ts: str) -> float:
+            try:
+                return datetime.fromisoformat(ts).timestamp()
+            except Exception:
+                return 0.0
+
+        CO_WINDOW = 300  # 5 phút
+        TAU = 3600       # hằng số time-decay (1 giờ)
+
+        # Chỉ xét top-level comments để tránh bùng nổ edges
+        top_cmts = [c for c in comments if c.parent_id is None and c.author_id and c.timestamp]
+        for i, ci in enumerate(top_cmts):
+            t_i = _ts_to_epoch(ci.timestamp)
+            for cj in top_cmts[i+1:]:
+                if ci.author_id == cj.author_id:
+                    continue
+                t_j = _ts_to_epoch(cj.timestamp)
+                delta = abs(t_i - t_j)
+                if delta > CO_WINDOW:
+                    continue
+                key = tuple(sorted([ci.author_id, cj.author_id])) + ("co_occur",)
+                if key in seen_uu_edges:
+                    continue
+                seen_uu_edges.add(key)
+                weight = round(math.exp(-delta / TAU), 4)
+                for src, tgt in [(ci.author_id, cj.author_id), (cj.author_id, ci.author_id)]:
+                    sample.edges_user_user.append(UserUserEdge(
+                        source_user_id=src,
+                        target_user_id=tgt,
+                        relation_type="co_occur",
+                        timestamp=ci.timestamp,
+                        edge_weight=weight,
+                    ))
+
+        # ── Hashtag nodes + Post→Hashtag edges ───────────────────────────────
+        from ..graph.schema import HashtagNode, PostHashtagEdge
+
+        all_tags: set = set(post.hashtags or [])
+        for c in comments:
+            all_tags.update(c.hashtags or [])
+
+        seen_tags: dict = {}  # tag → HashtagNode
+        for tag in all_tags:
+            if tag not in seen_tags:
+                seen_tags[tag] = HashtagNode(
+                    hashtag=tag, frequency=1, post_ids=[post.post_id]
+                )
+            else:
+                seen_tags[tag].frequency += 1
+
+        sample.hashtags = list(seen_tags.values())
+
+        for tag in all_tags:
+            # Bidirectional: Post→Hashtag và Hashtag→Post
+            sample.edges_post_hashtag.append(PostHashtagEdge(
+                post_id=post.post_id, hashtag=tag, direction="has_hashtag"
+            ))
+            sample.edges_post_hashtag.append(PostHashtagEdge(
+                post_id=post.post_id, hashtag=tag, direction="in_post"
+            ))
 
         return sample
