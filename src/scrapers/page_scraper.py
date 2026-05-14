@@ -8,7 +8,7 @@ from playwright.async_api import BrowserContext
 from loguru import logger
 
 from .base import BaseScraper
-from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge, CommentReplyEdge, ReactEdge
+from ..graph.schema import PostNode, CommentNode, UserPostEdge, GraphSample, HashtagNode, PostHashtagEdge, CommentReplyEdge
 from ..extractors.post_extractor import PostExtractor
 from ..extractors.comment_extractor import CommentExtractor
 from ..extractors.media_extractor import MediaExtractor
@@ -335,21 +335,8 @@ class PageScraper(BaseScraper):
                     timestamp=comment.timestamp,
                 ))
 
-        # ── React edges ───────────────────────────────────────────────────────
-        # Aggregated post reactions (like/haha/sad...) → node features của Post
-        # không tạo edge vì không có per-user data → tránh "fake" edges với agg_ user_id
-        # ReactEdge chỉ dùng khi có user_id thực sự (comment reactions)
-        from ..graph.schema import ReactEdge
-        for comment in comments:
-            if comment.reaction_type and comment.author_id:
-                # Tách thành separate edge type: react_like, react_haha, etc.
-                # → HAN sẽ học ma trận trọng số riêng cho từng loại cảm xúc
-                sample.edges_react.append(ReactEdge(
-                    user_id=comment.author_id,
-                    target_id=comment.comment_id,
-                    target_type="comment",
-                    react_type=comment.reaction_type,
-                ))
+        # Reactions → stored as Post node features (like_count, haha_count, etc.)
+        # not as edges: per-user react data not collectable from Facebook public pages
 
         # ── (Removed) Text/Image nodes → now stored as node features ─────────
         # Text/Image được embed offline thành node features của Post/Comment

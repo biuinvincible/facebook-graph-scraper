@@ -189,18 +189,6 @@ class UserUserEdge:
 
 
 
-@dataclass
-class ReactEdge:
-    """User →[react: type]→ Post/Comment — thái độ cộng đồng (like/haha/sad/angry/care)"""
-    user_id: str = ""
-    target_id: str = ""       # post_id hoặc comment_id
-    target_type: str = "post" # "post" | "comment"
-    react_type: str = "like"  # like, love, haha, wow, sad, angry, care
-    edge_type: str = "react"
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items()}
-
 
 @dataclass
 class CommentReplyEdge:
@@ -293,7 +281,6 @@ class GraphSample:
     edges_user_user: List[UserUserEdge] = field(default_factory=list)
     edges_user_comment: List[UserCommentEdge] = field(default_factory=list)
     edges_comment_reply: List["CommentReplyEdge"] = field(default_factory=list)
-    edges_react: List["ReactEdge"] = field(default_factory=list)
     edges_post_hashtag: List["PostHashtagEdge"] = field(default_factory=list)
     edges_post_post: List[PostPostEdge] = field(default_factory=list)
 
@@ -385,7 +372,6 @@ class GraphSample:
                 "edges_user_comment": [e.to_dict() for e in self.edges_user_comment],
                 "edges_user_user": [e.to_dict() for e in self.edges_user_user],
                 "edges_comment_reply": [e.to_dict() for e in self.edges_comment_reply],
-                "edges_react": [e.to_dict() for e in self.edges_react],
                 "edges_post_hashtag": [e.to_dict() for e in self.edges_post_hashtag],
                 "edges_post_post": [e.to_dict() for e in self.edges_post_post],
             },
