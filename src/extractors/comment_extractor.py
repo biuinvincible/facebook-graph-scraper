@@ -3,6 +3,7 @@ Comment tree extractor - builds hierarchical comment graph.
 Handles expand-all, load-more, nested replies.
 """
 import asyncio
+import hashlib
 import re
 import uuid
 from typing import List, Dict, Any, Optional
@@ -215,29 +216,10 @@ class CommentExtractor:
             else:
                 no_new_streak = 0
 
-        # Expand replies + scroll lại từ đầu để collect
+        # Expand replies rồi batch-collect toàn bộ qua JS — không cần scroll pass thứ 2
         if self.scrape_replies:
             await self._expand_all_reply_buttons(page)
-            await asyncio.sleep(10)  # chờ GraphQL responses về
-            # Scroll về đầu comment section
-            await self._scroll_to_comments(page)
-            await asyncio.sleep(1)
-            # Reset và scroll lại để pick up replies đã load
-            self._processed_el_count = 0
-            no_new_streak_r = 0
-            for _ in range(60):  # nhiều iterations hơn
-                if len(comments) >= self.max_comments:
-                    break
-                await self._scroll_incremental(page, px=250, steps=1, delay=0.4)
-                new_r = await self._collect_batch(page, post_id, seen_ids, comments, edges)
-                if new_r == 0:
-                    no_new_streak_r += 1
-                    if no_new_streak_r >= 8:  # threshold cao hơn
-                        break
-                    await asyncio.sleep(0.5)  # thêm wait khi empty
-                else:
-                    no_new_streak_r = 0
-            # Final pass trên full page cho replies là portals
+            await asyncio.sleep(5)  # chờ GraphQL responses về
             await self._collect_replies_fullpage(page, post_id, seen_ids, comments, edges)
 
         logger.info(f"Extracted {len(comments)} comments for post {post_id}")
@@ -336,14 +318,14 @@ class CommentExtractor:
                         let numericId = null;
                         const anchor = el.querySelector('a[href*="comment_id"]');
                         if (anchor) {
-                            const m = anchor.href.match(/comment_id[=:](\d+)/);
+                            const m = anchor.href.match(/comment_id[=:](\\d+)/);
                             if (m) numericId = m[1];
                         }
                         // Relative timestamp từ span bên trong
                         let relTime = '';
                         for (const s of el.querySelectorAll('span, a[role="link"]')) {
                             const t = (s.innerText || '').trim();
-                            if (/^(khoảng )?\d+ (giây|phút|giờ|ngày|tuần|tháng)/.test(t)) { relTime = t; break; }
+                            if (/^(khoảng )?\\d+ (giây|phút|giờ|ngày|tuần|tháng)/.test(t)) { relTime = t; break; }
                         }
                         results.push({ aria, authorName, authorHref, text, imgs, numericId, relTime });
                     }
@@ -392,7 +374,7 @@ class CommentExtractor:
                         comment_id = item['numericId']
                     else:
                         key = f"{item['aria']}|{author_href}|{raw_text}"
-                        comment_id = f"cmt_{hash(key) & 0xFFFFFFFF:x}"
+                        comment_id = f"cmt_{hashlib.md5(key.encode()).hexdigest()[:8]}"
 
                     if comment_id in seen_ids:
                         skip_count += 1; continue
@@ -405,7 +387,7 @@ class CommentExtractor:
                         comment_id=comment_id,
                         post_id=post_id,
                         parent_id=parent_id,
-                        depth=1 if parent_id else 0,
+                        depth=(next((c.depth + 1 for c in comments if c.comment_id == parent_id), 1) if parent_id else 0),
                         author_id=author_id,
                         author_name=author_name,
                         raw_text=raw_text,
@@ -427,8 +409,10 @@ class CommentExtractor:
                             comment_id=comment_id,
                             relation_type="author",
                         ))
-                except Exception:
+                except Exception as exc:
                     skip_count += 1
+                    if skip_count <= 5:
+                        logger.debug(f"Reply item parse error ({skip_count}): {exc}")
                     continue
             logger.debug(f"collect_replies_fullpage: {len(raw_items)} els, +{new_count} new, {skip_count} skipped/fail")
         except Exception as e:
@@ -459,8 +443,10 @@ class CommentExtractor:
         clicked_total = 0
         seen_btn_keys: set = set()
         last_progress = _time.monotonic()
-        IDLE_TIMEOUT  = 6    # dừng sau 6s không có progress (không click + đang ở đáy)
+        start_time    = _time.monotonic()
+        IDLE_TIMEOUT  = 3    # dừng sau 3s không có progress (không click + đang ở đáy)
         MAX_STEPS     = 2000  # safety cap tuyệt đối
+        MAX_DURATION  = 180   # hard cap 3 phút tổng cho toàn bộ expand phase
 
         for step in range(MAX_STEPS):
             scroll_info = await page.evaluate("""() => {
@@ -519,7 +505,7 @@ class CommentExtractor:
                     }""", [b['x'], b['y']])
                     if still_there:
                         await page.mouse.click(b['x'], b['y'])
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(0.8)
                         clicked_total += 1
                         clicked_this_step += 1
                     else:
@@ -534,6 +520,10 @@ class CommentExtractor:
                 last_progress = _time.monotonic()
             elif _time.monotonic() - last_progress > IDLE_TIMEOUT:
                 # Đang ở đáy + không click gì trong IDLE_TIMEOUT giây → hết content
+                break
+
+            if _time.monotonic() - start_time > MAX_DURATION:
+                logger.debug(f"expand_all_reply_buttons: hit {MAX_DURATION}s cap at step {step}")
                 break
 
             if center:
@@ -1206,7 +1196,7 @@ class CommentExtractor:
             text_el = await el.query_selector("div[dir='auto']")
             text = (await text_el.inner_text()) if text_el else ""
             key = f"{aria}|{author_href}|{text}"
-            return f"cmt_{hash(key) & 0xFFFFFFFF:x}"
+            return f"cmt_{hashlib.md5(key.encode()).hexdigest()[:8]}"
         except Exception:
             pass
         return None
@@ -1231,7 +1221,7 @@ class CommentExtractor:
             span_text = await el.evaluate("""el => {
                 for (const s of el.querySelectorAll('span, a[role="link"]')) {
                     const t = (s.innerText || '').trim();
-                    if (/^(khoảng )?\d+ (giây|phút|giờ|ngày|tuần|tháng)/.test(t)) return t;
+                    if (/^(khoảng )?\\d+ (giây|phút|giờ|ngày|tuần|tháng)/.test(t)) return t;
                 }
                 return '';
             }""")

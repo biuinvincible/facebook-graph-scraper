@@ -162,9 +162,15 @@ class BaseScraper:
                 logger.warning(f"HTTP {resp.status if resp else 'None'} for {url}")
 
             except Exception as e:
-                logger.warning(f"Navigation attempt {attempt+1} failed for {url}: {e}")
+                err = str(e).lower()
+                is_network = any(k in err for k in (
+                    "net::", "err_internet", "err_network", "err_connection",
+                    "timeout", "timed out", "eof", "connection reset",
+                ))
+                wait = 30 if is_network else 3 * (attempt + 1)
+                logger.warning(f"Navigation attempt {attempt+1} failed for {url}: {e} — wait {wait}s")
                 if attempt < 2:
-                    await asyncio.sleep(3 * (attempt + 1))
+                    await asyncio.sleep(wait)
 
         return False
 

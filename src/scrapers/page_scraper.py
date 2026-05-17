@@ -285,11 +285,14 @@ class PageScraper(BaseScraper):
         # Mention edges from post text
         for mention_slug in extract_mentions(post.raw_text or ""):
             if post.author_id:
-                sample.edges_user_user.append(UserUserEdge(
-                    source_user_id=post.author_id,
-                    target_user_id=mention_slug,
-                    relation_type="mention",
-                ))
+                key = (post.author_id, mention_slug, "mention")
+                if key not in seen_uu_edges:
+                    seen_uu_edges.add(key)
+                    sample.edges_user_user.append(UserUserEdge(
+                        source_user_id=post.author_id,
+                        target_user_id=mention_slug,
+                        relation_type="mention",
+                    ))
 
         # ── Bidirectional reversed edges (mention/reply) ──────────────────────
         reversed_edges = []

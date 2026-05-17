@@ -180,12 +180,10 @@ class UserUserEdge:
             "target_user_id": self.target_user_id,
             "relation_type": self.relation_type,
             "is_mutual": self.is_mutual,
+            "edge_weight": self.edge_weight,
             "timestamp": self.timestamp,
             "edge_type": self.edge_type,
         }
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {k: v for k, v in self.__dict__.items()}
 
 
 

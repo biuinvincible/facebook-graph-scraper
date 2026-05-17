@@ -1,6 +1,6 @@
 scraper:
-  headless: false           # Set true for production, false for debugging
-  slow_mo: 100              # ms delay between actions (human-like)
+  headless: true           # Set true for production, false for debugging
+  slow_mo: 0                # ms delay between actions (human-like)
   timeout: 30000            # Page load timeout ms
   viewport:
     width: 1366
@@ -13,7 +13,7 @@ scraper:
   max_delay: 4.0
 
   # Session
-  cookies_file: "cookies/session.json"
+  cookies_file: "cookies/session_2.json"
   save_session: true
 
   # Proxy (optional)
@@ -27,7 +27,7 @@ storage:
   output_dir: "data/raw"
   media_dir: "data/media"
   db_path: "data/facebook_graph.db"
-  json_dir: "data/json"
+  json_dir: "data/raw"
   export_format: ["json", "sqlite"]  # json, sqlite, csv
   download_media: true
   max_media_size_mb: 50
@@ -35,7 +35,7 @@ storage:
 scraping:
   # What to scrape per post
   scrape_comments: true
-  max_comments: 500
+  max_comments: 200
   scrape_replies: true
   max_replies_per_comment: 50
   scrape_reactions: true
@@ -47,6 +47,7 @@ scraping:
   max_posts_per_target: 200
   scroll_pause: 2.0
   max_scroll_attempts: 50
+  post_timeout_seconds: 600    # max 10 phút/post — tránh treo vô hạn
 
   # Targets (added via CLI or config)
   targets: []

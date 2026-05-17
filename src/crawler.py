@@ -255,6 +255,8 @@ class FacebookCrawler:
         count = 0
         ban_detector = BanDetector()
 
+        POST_TIMEOUT = self.scraping_cfg.get("post_timeout_seconds", 600)
+
         async def handle_sample(sample):
             nonlocal count
             if not sample.post:
@@ -266,7 +268,17 @@ class FacebookCrawler:
                 logger.debug(f"Skipping already scraped: {post_id}")
                 return
 
-            await self._save_sample(sample)
+            try:
+                await asyncio.wait_for(self._save_sample(sample), timeout=30)
+            except asyncio.TimeoutError:
+                logger.error(f"Save timeout for {post_id} — skipping")
+                self.checkpoint.mark_failed(post_id)
+                return
+            except Exception as e:
+                logger.error(f"Save failed for {post_id}: {e} — skipping")
+                self.checkpoint.mark_failed(post_id)
+                return
+
             all_posts.append(sample.post)
             self.checkpoint.mark_scraped(post_id)
             self.rate_limiter.on_success()
@@ -308,17 +320,23 @@ class FacebookCrawler:
             pe = PostExtractor(cfg)
             ce = CommentExtractor(cfg)
             me = MediaExtractor(cfg.get("storage", {}))
-            post = await pe.extract_from_url(page, url)
-            if post:
-                post = await me.process_post_media(post)
-                comments, comment_edges = await ce.extract_all_comments(page, post.post_id)
-                from .graph.schema import UserNode
-                author_node = UserNode(
-                    user_id=post.author_id or "",
-                    display_name=post.author_name or "",
-                ) if post.author_id else None
-                sample = scraper._build_sample(post, author_node, comments, comment_edges)
-                await handle_sample(sample)
+            try:
+                async with asyncio.timeout(POST_TIMEOUT):
+                    post = await pe.extract_from_url(page, url)
+                    if post:
+                        post = await me.process_post_media(post)
+                        comments, comment_edges = await ce.extract_all_comments(page, post.post_id)
+                        from .graph.schema import UserNode
+                        author_node = UserNode(
+                            user_id=post.author_id or "",
+                            display_name=post.author_name or "",
+                        ) if post.author_id else None
+                        sample = scraper._build_sample(post, author_node, comments, comment_edges)
+                        await handle_sample(sample)
+            except asyncio.TimeoutError:
+                logger.warning(f"Post timeout ({POST_TIMEOUT}s): {url} — skipping")
+            except Exception as e:
+                logger.warning(f"Post error: {url}: {e} — skipping")
 
         logger.info(f"Target done: {count} new posts scraped | type={target_type}")
         return count

@@ -5,7 +5,6 @@ Also handles batch export and JSONL streaming.
 import asyncio
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
 import aiofiles
 import orjson
 from loguru import logger
@@ -19,19 +18,15 @@ class JsonStorage:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     async def save_sample(self, sample: GraphSample) -> str:
-        """Save a GraphSample to JSON file, return path"""
+        """Save a GraphSample to JSON file atomically (tmp → rename), return path"""
         post_id = sample.post.post_id if sample.post else sample.sample_id
-
-        # Organize by date
-        ts = sample.scraped_at[:10] if sample.scraped_at else datetime.utcnow().strftime("%Y-%m-%d")
-        day_dir = self.output_dir / ts
-        day_dir.mkdir(exist_ok=True)
-
-        filepath = day_dir / f"{post_id}.json"
+        filepath = self.output_dir / f"{post_id}.json"
+        tmp_path = filepath.with_suffix(".tmp")
         data = sample.to_training_json()
 
-        async with aiofiles.open(filepath, "wb") as f:
+        async with aiofiles.open(tmp_path, "wb") as f:
             await f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2 | orjson.OPT_NON_STR_KEYS))
+        tmp_path.replace(filepath)  # atomic on same filesystem
 
         return str(filepath)
 
