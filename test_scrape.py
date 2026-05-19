@@ -13,7 +13,7 @@ from src.storage.json_storage import JsonStorage
 from src.storage.database import Database
 import yaml
 
-TARGET_URL   = "https://www.facebook.com/share/p/1C3UCReQNm/"
+TARGET_URL   = "https://www.facebook.com/share/p/1EeQjQr3aA/"
 MAX_POSTS    = 1
 SKIP_NO_TEXT = False
 MAX_COMMENTS = 100
@@ -78,6 +78,7 @@ async def run():
     scraper_cfg = cfg["scraper"].copy()
     scraper_cfg["headless"] = False
     scraper_cfg["slow_mo"] = 50
+
     scraper_cfg["cookies_file"] = "cookies/session_2.json"
 
     flat = {
