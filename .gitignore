@@ -25,3 +25,29 @@ proxies/
 .vscode/
 .idea/
 *.swp
+
+# Temp files
+*.tmp
+/tmp/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.db.bak
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Target lists (large, generated — keep only canonical ones)
+targets_*.yaml
+!targets_example.yaml
+!targets_all_domains.yaml
+
+# Page config lists (working files, not for repo)
+pages_*.yaml
+
+# Processed / split datasets
+data/processed/
+data/splits/

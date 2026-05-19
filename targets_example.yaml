@@ -1,39 +1,23 @@
-# Example targets file for Facebook Graph Scraper
-# Run with: python main.py scrape --from-file targets_example.yaml
+# Example targets file for facebook-scraper
+#
+# Feed to the scraper:
+#   python main.py scrape --from-file targets_example.yaml
+#
+# This flat-list format is what collect_urls.py produces.
+# Each entry requires: type, url, category
+#
+# Supported URL formats:
+#   https://www.facebook.com/{page_slug}/posts/{post_id}
+#   https://www.facebook.com/permalink.php?story_fbid={fbid}&id={page_id}
 
-targets:
-  # Public Pages
-  - type: page
-    url: https://www.facebook.com/vnexpress.net
-    max_posts: 50
+- type: post
+  url: https://www.facebook.com/vnexpress.net/posts/pfbid0ExamplePostId1111111
+  category: tin_tuc
 
-  - type: page
-    url: https://www.facebook.com/tuoitre
-    max_posts: 50
+- type: post
+  url: https://www.facebook.com/PageWSS/posts/pfbid0ExamplePostId2222222
+  category: hai_meme
 
-  # Public Groups (requires login for most)
-  - type: group
-    url: https://www.facebook.com/groups/amthucvietnam
-    max_posts: 100
-
-  # Search by keyword (requires login)
-  - type: search
-    query: "ẩm thực sài gòn"
-    max_posts: 200
-
-  - type: search
-    query: "review quán ăn hà nội"
-    max_posts: 100
-
-  # Hashtags
-  - type: hashtag
-    query: foodreview
-    max_posts: 150
-
-  - type: hashtag
-    query: saigonfood
-    max_posts: 100
-
-  # Single posts
-  - type: post
-    url: https://www.facebook.com/permalink/REPLACE_WITH_REAL_POST_ID
+- type: post
+  url: https://www.facebook.com/permalink.php?story_fbid=333333333333333&id=100000000000001
+  category: am_thuc

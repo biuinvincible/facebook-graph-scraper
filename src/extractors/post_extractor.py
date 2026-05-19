@@ -28,7 +28,7 @@ class PostExtractor:
         try:
             is_photo = "/photo/" in url or "fbid=" in url
             # networkidle đảm bảo chỉ có post chính load, related posts chưa lazy-load
-            await page.goto(url, wait_until="networkidle", timeout=30000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2)
             await self._dismiss_dialogs(page)
             if is_photo:

@@ -141,8 +141,10 @@ class BrowserManager:
             return
         self.cookies_file.parent.mkdir(parents=True, exist_ok=True)
         cookies = await self._context.cookies()
-        with open(self.cookies_file, "w") as f:
+        tmp = self.cookies_file.with_suffix(".tmp")
+        with open(tmp, "w") as f:
             json.dump(cookies, f, indent=2)
+        tmp.replace(self.cookies_file)  # atomic write
         logger.info(f"Saved {len(cookies)} cookies to {self.cookies_file}")
 
     async def load_cookies(self):

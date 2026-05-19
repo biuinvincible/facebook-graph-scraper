@@ -83,7 +83,7 @@ class BaseScraper:
         """Login with email/password. Dùng page.fill() để tránh visibility issues."""
         page = await self.get_page()
         try:
-            await page.goto(f"{self.FB_BASE}/login", wait_until="networkidle", timeout=30000)
+            await page.goto(f"{self.FB_BASE}/login", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2)
 
             # Dùng page.fill() — không cần element visible, điền thẳng vào DOM
@@ -115,7 +115,7 @@ class BaseScraper:
                 await page.keyboard.press("Enter")
 
             # Chờ redirect
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
             await asyncio.sleep(3)
 
             return await self.ensure_logged_in()
