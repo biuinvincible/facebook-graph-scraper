@@ -1,7 +1,7 @@
 scraper:
   headless: true           # Set true for production, false for debugging
   slow_mo: 0                # ms delay between actions (human-like)
-  timeout: 30000            # Page load timeout ms
+  timeout: 15000            # Page load timeout ms
   viewport:
     width: 1366
     height: 768
@@ -9,8 +9,8 @@ scraper:
   # Anti-detection
   stealth: true
   randomize_delays: true
-  min_delay: 1.5            # seconds between requests
-  max_delay: 4.0
+  min_delay: 0.8            # seconds between requests
+  max_delay: 2.0
 
   # Session
   cookies_file: "cookies/session_2.json"
@@ -35,7 +35,7 @@ storage:
 scraping:
   # What to scrape per post
   scrape_comments: true
-  max_comments: 200
+  max_comments: 50
   scrape_replies: true
   max_replies_per_comment: 50
   scrape_reactions: true
@@ -45,9 +45,9 @@ scraping:
 
   # Pagination
   max_posts_per_target: 200
-  scroll_pause: 2.0
+  scroll_pause: 1.0
   max_scroll_attempts: 50
-  post_timeout_seconds: 600    # max 10 phút/post — tránh treo vô hạn
+  post_timeout_seconds: 180    # max 3 phút/post
 
   # Targets (added via CLI or config)
   targets: []

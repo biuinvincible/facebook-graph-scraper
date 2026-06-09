@@ -41,6 +41,7 @@ async def run_worker(worker_id: int, targets: list, session_file: str):
     config_file = create_config(session_file, checkpoint_file, worker_id)
 
     cmd = [
+        "nice", "-n", "10",
         ".venv/bin/python3", "main.py", "scrape",
         "--from-file", chunk_file,
         "--config", config_file,

@@ -124,7 +124,7 @@ class PageScraper(BaseScraper):
                         )
                         comments = [
                             await self.media_extractor.process_comment_media(c, post.post_id)
-                            if c.image_urls else c
+                            if c.image_urls and any("scontent" in u for u in c.image_urls) else c
                             for c in comments
                         ]
 
@@ -341,10 +341,46 @@ class PageScraper(BaseScraper):
         # Reactions → stored as Post node features (like_count, haha_count, etc.)
         # not as edges: per-user react data not collectable from Facebook public pages
 
-        # ── (Removed) Text/Image nodes → now stored as node features ─────────
-        # Text/Image được embed offline thành node features của Post/Comment
-        # không tạo node riêng để tránh node explosion O(N)
-        # See: step 4&5 - offline BLIP-2/DINOv2 embedding pipeline
+        # ── Image nodes + Content→Image edges ────────────────────────────────
+        from ..graph.schema import ImageNode, ContentImageEdge
+        import hashlib
+
+        def _img_id(source_id: str, path: str) -> str:
+            key = f"{source_id}|{path}"
+            return f"img_{hashlib.md5(key.encode()).hexdigest()[:8]}"
+
+        # Post images
+        for url, local_path in zip(post.image_urls or [], post.local_image_paths or []):
+            iid = _img_id(post.post_id, local_path or url)
+            sample.images.append(ImageNode(
+                image_id=iid, local_path=local_path, image_url=url,
+                source_type="post", source_id=post.post_id,
+            ))
+            sample.edges_content_image.append(ContentImageEdge(
+                source_id=post.post_id, image_id=iid,
+                source_type="post", direction="contains",
+            ))
+            sample.edges_content_image.append(ContentImageEdge(
+                source_id=post.post_id, image_id=iid,
+                source_type="post", direction="contained_by",
+            ))
+
+        # Comment images
+        for comment in comments:
+            for url, local_path in zip(comment.image_urls or [], comment.local_image_paths or []):
+                iid = _img_id(comment.comment_id, local_path or url)
+                sample.images.append(ImageNode(
+                    image_id=iid, local_path=local_path, image_url=url,
+                    source_type="comment", source_id=comment.comment_id,
+                ))
+                sample.edges_content_image.append(ContentImageEdge(
+                    source_id=comment.comment_id, image_id=iid,
+                    source_type="comment", direction="contains",
+                ))
+                sample.edges_content_image.append(ContentImageEdge(
+                    source_id=comment.comment_id, image_id=iid,
+                    source_type="comment", direction="contained_by",
+                ))
 
 
         # ── Hashtag nodes + Post→Hashtag edges ───────────────────────────────

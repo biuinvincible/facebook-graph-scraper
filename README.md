@@ -2,86 +2,120 @@
 
 Thu thập posts, comment trees và interaction edges từ Facebook public pages — xuất ra JSON sẵn dùng cho GNN training.
 
+**Node types:** Post, User, Comment, Hashtag, Image  
+**Edge types:** author, reply_to, mention, has_hashtag, share
+
 ---
 
-## Setup
+## Setup (Ubuntu / Debian / WSL2)
 
 ```bash
-pip install -r requirements.txt
-playwright install chromium
-cp .env.example .env   # điền FB_EMAIL, FB_PASSWORD
+git clone <repo>
+cd facebook-scraper
+bash setup.sh
 ```
 
-### Login (lần đầu)
+`setup.sh` tự động:
+- Kiểm tra Python 3.10+
+- Cài system packages (tesseract, playwright deps, screen)
+- Tạo `.venv` và `pip install -r requirements.txt`
+- Cài Playwright Chromium
+- Tạo `.env` từ template
+
+### Login (bắt buộc trước khi crawl)
+
+Cần ít nhất **3 session files** để có thể rotate khi bị ban:
 
 ```bash
 python login.py cookies/session_2.json
-# Làm theo hướng dẫn trên màn hình, lặp lại cho session_3.json ... session_6.json
+python login.py cookies/session_3.json
+python login.py cookies/session_4.json
+# Optional: session_5.json, session_6.json
 ```
+
+Làm theo hướng dẫn trên màn hình (nhập email/password, xác nhận 2FA nếu có).
 
 ---
 
 ## Workflow
 
-### 1. Thu thập URLs từ một page
+### 1. Thu thập URLs
 
 ```bash
-# Single page
-python collect_urls.py https://www.facebook.com/PageWSS/ targets.yaml 2000
+# Chạy tất cả 8 batches (~6-8 tiếng, ~65k URLs)
+bash collect_urls.sh
 
-# Parallel (nhiều pages cùng lúc)
-python collect_urls.py --parallel pages_config.yaml targets_all.yaml
+# Chạy từ batch cụ thể (sau khi bị crash)
+bash collect_urls.sh 3        # từ batch 3 đến 8
+bash collect_urls.sh 3 5      # chỉ batch 3, 4, 5
+
+# Theo dõi
+bash status_collect.sh
+
+# Dừng
+bash stop_collect.sh
 ```
 
-**Format `pages_config.yaml`:**
-```yaml
-- url: https://www.facebook.com/neuconfessions/
-  session: cookies/session_2.json
-  category: confession
-  max_posts: 2000
-- url: https://www.facebook.com/trollbongda/
-  session: cookies/session_3.json
-  category: the_thao
-  max_posts: 2000
-```
+Kết quả lưu vào `targets_all_domains.yaml` — 40 pages, 10 categories:  
+`tin_tuc`, `the_thao`, `hai_meme`, `cong_nghe`, `kinh_te`, `giao_duc`,  
+`phim_anh`, `du_lich`, `suc_khoe`, `thoi_trang`, `game`, `am_thuc`
 
-### 2. Scrape (parallel, 3–4 workers)
+### 2. Crawl post content
 
 ```bash
-# Detach khỏi terminal để không bị lag
-nohup python parallel_scrape.py targets_all.yaml 4 > logs/orchestrator.log 2>&1 & disown
+bash crawl.sh          # 3 workers (mặc định)
+bash crawl.sh 2        # 2 workers (RAM thấp hơn)
+
+bash status.sh         # xem tiến độ
+bash stop.sh           # dừng
 ```
 
-### 3. Check tiến độ
+Posts lưu tại `data/raw/{post_id}.json`. Mỗi worker có checkpoint riêng tại `data/checkpoint_{N}.json` — tự động resume sau crash.
+
+### 3. Merge databases sau khi xong
 
 ```bash
-python scrape_status.py
-```
-
-### 4. Scrape single post (test)
-
-```bash
-python main.py scrape --from-file targets_example.yaml
+.venv/bin/python3 merge_dbs.py
 ```
 
 ---
 
-## Data
+## Multi-machine sync (optional)
 
-Mỗi post được lưu tại `data/raw/{post_id}.json`:
+Để 2 máy crawl song song không trùng post, dùng Supabase làm shared checkpoint:
+
+1. Tạo free project tại [supabase.com](https://supabase.com)
+2. SQL Editor → chạy:
+   ```sql
+   CREATE TABLE scraped_ids (
+       post_id TEXT PRIMARY KEY,
+       scraped_at TIMESTAMPTZ DEFAULT now()
+   );
+   ALTER TABLE scraped_ids DISABLE ROW LEVEL SECURITY;
+   ```
+3. Project Settings → API → copy URL và anon key vào `.env`:
+   ```
+   supabase_db=https://xxx.supabase.co/rest/v1/
+   supabase_key=eyJ...
+   ```
+
+Mỗi máy khi start sẽ tự fetch toàn bộ scraped_ids từ Supabase và merge vào local checkpoint.
+
+---
+
+## Data format
 
 ```
 data/
-  raw/          ← {post_id}.json (text, engagement, graph edges)
-  media/        ← {post_id}/img_000.jpg (ảnh post)
+  raw/          ← {post_id}.json
+  media/        ← {post_id}/img_000.jpg
 ```
 
-**Cấu trúc JSON:**
 ```json
 {
   "post_id": "...",
   "node_features": { "text": "...", "image_urls": [...] },
-  "engagement": { "like": 0, "comment_count": 0, ... },
+  "engagement": { "like": 0, "comment_count": 0 },
   "graph_structure": {
     "comment_tree": [...],
     "edges_user_user": [...],
@@ -89,8 +123,6 @@ data/
   }
 }
 ```
-
-**Edge types có trong data:**
 
 | Edge | Ý nghĩa |
 |---|---|
@@ -116,13 +148,18 @@ data = json_to_hetero_dict("data/raw/some_post.json")
 
 ## Config
 
-Chỉnh `config.yaml`:
+`config.yaml` — các tham số quan trọng:
 
 ```yaml
 scraper:
-  headless: true       # false để debug
-  max_comments: 200    # giới hạn comments/post
-  post_timeout_seconds: 600
+  headless: true             # false để debug trong browser
+  timeout: 15000             # page load timeout (ms)
+  min_delay: 0.8             # delay giữa requests (giây)
+  max_delay: 2.0
+
+scraping:
+  max_comments: 50           # comments/post
+  post_timeout_seconds: 180  # timeout/post
 ```
 
 ---
@@ -131,4 +168,5 @@ scraper:
 
 ```bash
 .venv/bin/pytest tests/ -q
+.venv/bin/pytest tests/test_checkpoint.py -v   # test cụ thể
 ```

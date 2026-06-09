@@ -45,9 +45,14 @@ targets_*.yaml
 !targets_example.yaml
 !targets_all_domains.yaml
 
-# Page config lists (working files, not for repo)
+# Page config lists — temp per-run configs excluded, canonical ones kept
 pages_*.yaml
+!pages_config_new.yaml
+!pages_batch_*.yaml
 
 # Processed / split datasets
 data/processed/
 data/splits/
+
+# Dataset zip exports (too large for git)
+*.zip

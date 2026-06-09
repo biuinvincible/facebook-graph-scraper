@@ -169,6 +169,12 @@ class FacebookCrawler:
         all_posts: list, max_retries: int = 3
     ):
         """Scrape 1 target với automatic retry khi bị ban"""
+        # Skip ngay nếu đã scrape — tránh retry 3 lần lãng phí
+        post_id = target.get("url", "").rstrip("/").split("/")[-1]
+        if self.checkpoint.is_scraped(post_id):
+            logger.debug(f"Already scraped, skipping: {post_id}")
+            return
+
         self.checkpoint.set_current_target(target)
 
         for attempt in range(max_retries):
@@ -326,6 +332,11 @@ class FacebookCrawler:
                     if post:
                         post = await me.process_post_media(post)
                         comments, comment_edges = await ce.extract_all_comments(page, post.post_id)
+                        comments = [
+                            await me.process_comment_media(c, post.post_id)
+                            if c.image_urls and any("scontent" in u for u in c.image_urls) else c
+                            for c in comments
+                        ]
                         from .graph.schema import UserNode
                         author_node = UserNode(
                             user_id=post.author_id or "",

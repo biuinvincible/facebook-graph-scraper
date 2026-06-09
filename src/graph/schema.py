@@ -227,6 +227,33 @@ class PostHashtagEdge:
 
 
 @dataclass
+class ImageNode:
+    """Image node — multimodal visual feature carrier"""
+    image_id: str
+    local_path: str = ""        # data/media/{post_id}/img_000.jpg
+    image_url: str = ""         # original CDN URL
+    source_type: str = "post"   # "post" | "comment"
+    source_id: str = ""         # post_id or comment_id
+    node_type: str = "image"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
+class ContentImageEdge:
+    """Post/Comment → Image edge (bidirectional)"""
+    source_id: str = ""         # post_id or comment_id
+    image_id: str = ""
+    source_type: str = "post"   # "post" | "comment"
+    direction: str = "contains" # "contains" | "contained_by"
+    edge_type: str = "content_image"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+@dataclass
 class PostPostEdge:
     """Post ↔ Post content similarity edge"""
     edge_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -273,6 +300,7 @@ class GraphSample:
 
     # Neighbor nodes
     hashtags: List["HashtagNode"] = field(default_factory=list)
+    images: List["ImageNode"] = field(default_factory=list)
 
     # Edges
     edges_user_post: List[UserPostEdge] = field(default_factory=list)
@@ -281,6 +309,7 @@ class GraphSample:
     edges_comment_reply: List["CommentReplyEdge"] = field(default_factory=list)
     edges_post_hashtag: List["PostHashtagEdge"] = field(default_factory=list)
     edges_post_post: List[PostPostEdge] = field(default_factory=list)
+    edges_content_image: List["ContentImageEdge"] = field(default_factory=list)
 
     # Metadata
     scraped_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
@@ -366,12 +395,14 @@ class GraphSample:
                 "neighbors": neighbors,
                 "comment_tree": comment_tree,
                 "hashtag_nodes": [h.to_dict() for h in self.hashtags],
+                "image_nodes": [i.to_dict() for i in self.images],
                 "edges_user_post": [e.to_dict() for e in self.edges_user_post],
                 "edges_user_comment": [e.to_dict() for e in self.edges_user_comment],
                 "edges_user_user": [e.to_dict() for e in self.edges_user_user],
                 "edges_comment_reply": [e.to_dict() for e in self.edges_comment_reply],
                 "edges_post_hashtag": [e.to_dict() for e in self.edges_post_hashtag],
                 "edges_post_post": [e.to_dict() for e in self.edges_post_post],
+                "edges_content_image": [e.to_dict() for e in self.edges_content_image],
             },
 
             "metadata": {
