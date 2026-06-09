@@ -4,8 +4,19 @@ Tests for src/utils/checkpoint.py — ScrapingCheckpoint
 import json
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.utils.checkpoint import ScrapingCheckpoint
+
+# Supabase không nên chạy trong tests — mock from_env trả None toàn bộ file
+pytestmark = pytest.mark.usefixtures("no_supabase")
+
+
+@pytest.fixture(autouse=True)
+def no_supabase():
+    with patch("src.utils.supabase_sync.from_env", return_value=None), \
+         patch("src.utils.checkpoint.from_env", return_value=None):
+        yield
 
 
 class TestScrapingCheckpointInit:

@@ -1,0 +1,49 @@
+# Bổ sung các category còn thiếu: suc_khoe, am_thuc, game (text posts)
+
+# --- suc_khoe ---
+- url: https://www.facebook.com/suckhoe365.net/
+  session: cookies/session_3.json
+  category: suc_khoe
+  max_posts: 2000
+
+- url: https://www.facebook.com/BaoSucKhoeVaDoisong/
+  session: cookies/session_5.json
+  category: suc_khoe
+  max_posts: 2000
+
+- url: https://www.facebook.com/songkhoe.medlatec/
+  session: cookies/session_6.json
+  category: suc_khoe
+  max_posts: 1500
+
+# --- am_thuc ---
+- url: https://www.facebook.com/monngonmoingay/
+  session: cookies/session_3.json
+  category: am_thuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/amthucvietnam.net/
+  session: cookies/session_5.json
+  category: am_thuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/huongdannauanngonvn/
+  session: cookies/session_6.json
+  category: am_thuc
+  max_posts: 1500
+
+# --- game (text-heavy community pages) ---
+- url: https://www.facebook.com/gameviet.net/
+  session: cookies/session_3.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/VNGGames/
+  session: cookies/session_5.json
+  category: game
+  max_posts: 1500
+
+- url: https://www.facebook.com/taimienphi.vn/
+  session: cookies/session_6.json
+  category: game
+  max_posts: 1500

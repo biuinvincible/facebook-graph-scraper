@@ -1,0 +1,64 @@
+# Fill missing categories với pages đã verify có text posts
+
+# --- suc_khoe ---
+- url: https://www.facebook.com/hellobacsi/
+  session: cookies/session_3.json
+  category: suc_khoe
+  max_posts: 2000
+
+- url: https://www.facebook.com/benhvienbachmai/
+  session: cookies/session_5.json
+  category: suc_khoe
+  max_posts: 2000
+
+- url: https://www.facebook.com/suckhoe.vnexpress/
+  session: cookies/session_6.json
+  category: suc_khoe
+  max_posts: 2000
+
+- url: https://www.facebook.com/thuocbietduoc/
+  session: cookies/session_3.json
+  category: suc_khoe
+  max_posts: 1500
+
+# --- am_thuc ---
+- url: https://www.facebook.com/Cooky.vn/
+  session: cookies/session_5.json
+  category: am_thuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/beptruyen/
+  session: cookies/session_6.json
+  category: am_thuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/vietfood.fanpage/
+  session: cookies/session_3.json
+  category: am_thuc
+  max_posts: 1500
+
+- url: https://www.facebook.com/reviewanngon/
+  session: cookies/session_5.json
+  category: am_thuc
+  max_posts: 1500
+
+# --- game ---
+- url: https://www.facebook.com/afk.vn/
+  session: cookies/session_6.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/pcworldvietnam/
+  session: cookies/session_3.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/vietgamedev/
+  session: cookies/session_5.json
+  category: game
+  max_posts: 1500
+
+- url: https://www.facebook.com/zingnews.games/
+  session: cookies/session_6.json
+  category: game
+  max_posts: 1500

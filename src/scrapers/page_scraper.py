@@ -25,7 +25,7 @@ class PageScraper(BaseScraper):
         super().__init__(context, config)
         self.post_extractor = PostExtractor(config)
         self.comment_extractor = CommentExtractor(config)
-        self.media_extractor = MediaExtractor(config.get("storage", {}))
+        self.media_extractor = MediaExtractor(config)
         self.user_extractor = UserExtractor(config)
         self.edge_builder = EdgeBuilder()
         self.max_posts = config.get("scraping", {}).get("max_posts_per_target", 200)

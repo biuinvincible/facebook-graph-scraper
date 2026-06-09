@@ -70,6 +70,38 @@ async def run_worker(worker_id: int, targets: list, session_file: str):
     return proc.returncode
 
 
+def load_targets(targets_file: str) -> list:
+    """Load targets từ YAML local, hoặc pull từ Supabase nếu file không tồn tại."""
+    path = Path(targets_file)
+    if path.exists():
+        targets = yaml.safe_load(path.read_text()) or []
+        if targets:
+            return targets
+        print(f"⚠️  {targets_file} trống — thử pull từ Supabase...")
+
+    # Fallback: pull từ Supabase
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from src.utils.supabase_sync import from_env
+        sb = from_env()
+        if not sb:
+            print(f"❌ {targets_file} không tồn tại và chưa cấu hình Supabase")
+            sys.exit(1)
+        print("📥 Pulling target URLs từ Supabase...")
+        items = sb.pull_target_urls()
+        if not items:
+            print("❌ Supabase trả về 0 URLs — chạy collect_urls.sh trước")
+            sys.exit(1)
+        # Lưu local để dùng lại
+        path.write_text(yaml.dump(items, allow_unicode=True, default_flow_style=False))
+        print(f"✓ Pulled {len(items)} URLs từ Supabase → {targets_file}")
+        return items
+    except Exception as e:
+        print(f"❌ Không load được targets: {e}")
+        sys.exit(1)
+
+
 async def main():
     targets_file = sys.argv[1] if len(sys.argv) > 1 else "targets_all_domains.yaml"
     n_workers    = int(sys.argv[2]) if len(sys.argv) > 2 else 5
@@ -82,7 +114,7 @@ async def main():
         "cookies/session_6.json",
     ]
 
-    targets = yaml.safe_load(Path(targets_file).read_text()) or []
+    targets = load_targets(targets_file)
     chunks  = split_targets(targets, n_workers)
 
     print(f"Parallel scrape: {len(targets)} URLs → {n_workers} workers")

@@ -69,7 +69,7 @@ else
 fi
 
 # ── Script permissions ────────────────────────────────────────────────────────
-chmod +x crawl.sh stop.sh status.sh collect_urls.sh stop_collect.sh status_collect.sh 2>/dev/null || true
+chmod +x crawl.sh stop.sh status.sh collect_urls.sh stop_collect.sh status_collect.sh monitor_collect.sh sync_targets.sh 2>/dev/null || true
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""

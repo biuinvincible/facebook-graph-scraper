@@ -42,10 +42,11 @@ Làm theo hướng dẫn trên màn hình (nhập email/password, xác nhận 2F
 ### 1. Thu thập URLs
 
 ```bash
-# Chạy tất cả 8 batches (~6-8 tiếng, ~65k URLs)
-bash collect_urls.sh
+# Auto-restart khi crash (khuyên dùng)
+bash monitor_collect.sh       # chạy game2 + batch8, tự restart nếu crash
 
-# Chạy từ batch cụ thể (sau khi bị crash)
+# Chạy thủ công từng batch
+bash collect_urls.sh          # tất cả 8 batches
 bash collect_urls.sh 3        # từ batch 3 đến 8
 bash collect_urls.sh 3 5      # chỉ batch 3, 4, 5
 
@@ -92,6 +93,13 @@ Posts lưu tại `data/raw/{post_id}.json`. Mỗi worker có checkpoint riêng t
        scraped_at TIMESTAMPTZ DEFAULT now()
    );
    ALTER TABLE scraped_ids DISABLE ROW LEVEL SECURITY;
+
+   CREATE TABLE target_urls (
+       url TEXT PRIMARY KEY,
+       category TEXT,
+       added_at TIMESTAMPTZ DEFAULT now()
+   );
+   ALTER TABLE target_urls DISABLE ROW LEVEL SECURITY;
    ```
 3. Project Settings → API → copy URL và anon key vào `.env`:
    ```
@@ -100,6 +108,15 @@ Posts lưu tại `data/raw/{post_id}.json`. Mỗi worker có checkpoint riêng t
    ```
 
 Mỗi máy khi start sẽ tự fetch toàn bộ scraped_ids từ Supabase và merge vào local checkpoint.
+
+**Phân công máy:**
+
+| Máy | Việc |
+|---|---|
+| Máy A (collect) | `bash collect_urls.sh` → tự push URLs mới lên Supabase sau mỗi batch |
+| Máy B (crawl) | `bash crawl.sh` → tự pull URLs từ Supabase nếu không có file local |
+
+Máy B không cần `collect_urls.sh`. Khi `bash crawl.sh` được gọi lần đầu mà chưa có `targets_all_domains.yaml`, nó tự chạy `sync_targets.sh` để pull từ Supabase. Có thể cũng chạy `bash sync_targets.sh` thủ công để refresh danh sách.
 
 ---
 

@@ -19,6 +19,12 @@ if screen -ls | grep -q "$SCREEN_NAME"; then
     exit 1
 fi
 
+# ── Auto-sync targets từ Supabase nếu file local không tồn tại ───────────────
+if [ ! -f "$TARGETS" ] || [ ! -s "$TARGETS" ]; then
+    echo "📥 $TARGETS không có — pulling từ Supabase..."
+    bash sync_targets.sh "$TARGETS" || exit 1
+fi
+
 # ── Status hiện tại ───────────────────────────────────────────────────────────
 POSTS=$(ls data/raw/*.json 2>/dev/null | wc -l)
 echo "📦 Posts hiện tại: $POSTS"

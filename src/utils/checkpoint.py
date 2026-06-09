@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Set, List, Dict, Any, Optional
 from datetime import datetime
 from loguru import logger
+from src.utils.supabase_sync import from_env
 
 
 class ScrapingCheckpoint:
@@ -33,8 +34,6 @@ class ScrapingCheckpoint:
         }
         self._dirty_count = 0
 
-        # Supabase sync (optional)
-        from src.utils.supabase_sync import from_env
         self._supabase = from_env()
 
         self._load()

@@ -33,11 +33,34 @@ sys.path.insert(0, ".")
 _POST_URL_RE = re.compile(
     r'facebook\.com/(?:[^/]+/posts/(?:pfbid[A-Za-z0-9]+|\d+)'   # /page/posts/ID
     r'|permalink\.php\?story_fbid=\d+'                            # permalink.php?story_fbid=
-    r'|[^/]+/permalink/\d+)'                                      # /page/permalink/ID
+    r'|[^/]+/permalink/\d+'                                       # /page/permalink/ID
+    r'|[^/]+/photos/(?:pfbid[A-Za-z0-9]+|\d+)'                  # /page/photos/ID
+    r'|[^/]+/posts/pfbid[A-Za-z0-9]+)'                           # /page/posts/pfbid...
 )
 
 def is_valid_post_url(url: str) -> bool:
     return bool(_POST_URL_RE.search(url))
+
+
+def _push_to_supabase(items: list):
+    """Push [{url, category}] lên Supabase. Silent nếu chưa cấu hình."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from src.utils.supabase_sync import from_env
+        sb = from_env()
+        if not sb:
+            return
+        payload = [{"url": x["url"], "category": x.get("category", "")}
+                   for x in items if isinstance(x, dict) and "url" in x]
+        if not payload:
+            return
+        ok = sb.push_urls(payload)
+        if ok:
+            total = sb.count_target_urls()
+            print(f"[Supabase] +{len(payload)} URLs (remote total: {total or '?'})")
+    except Exception as e:
+        print(f"[Supabase] push bỏ qua: {e}")
 
 JS_COLLECT = """
     (slug) => {
@@ -49,18 +72,19 @@ JS_COLLECT = """
             if (!h || h.includes('/reel/') || h.includes('/videos/')) return;
             if (h.includes('/groups/')) return;
 
-            // Chỉ lấy native post URLs — /slug/posts/ID hoặc story_fbid=
+            // Chỉ lấy native post URLs — /slug/posts/ID, /slug/photos/, hoặc story_fbid=
             const isSlugPost = slugLow && (
                 h.toLowerCase().includes('/' + slugLow + '/posts/') ||
-                h.toLowerCase().includes('/' + slugLow + '/permalink/')
+                h.toLowerCase().includes('/' + slugLow + '/permalink/') ||
+                h.toLowerCase().includes('/' + slugLow + '/photos/')
             );
-            const isPermalink = h.includes('story_fbid=');
+            const isPermalink = h.includes('story_fbid=') || h.includes('pfbid');
             const isGenericPost = !slugLow && h.includes('/posts/');
 
             if (!isSlugPost && !isPermalink && !isGenericPost) return;
 
             let clean;
-            if (isPermalink && h.includes('story_fbid=')) {
+            if (h.includes('story_fbid=')) {
                 try {
                     const u = new URL(h);
                     const fbid = u.searchParams.get('story_fbid');
@@ -96,12 +120,13 @@ JS_INSTALL_OBSERVER = """
                 if (h.includes('/groups/')) return;
                 const isSlugPost = slugLow && (
                     h.toLowerCase().includes('/' + slugLow + '/posts/') ||
-                    h.toLowerCase().includes('/' + slugLow + '/permalink/')
+                    h.toLowerCase().includes('/' + slugLow + '/permalink/') ||
+                    h.toLowerCase().includes('/' + slugLow + '/photos/')
                 );
-                const isPermalink = h.includes('story_fbid=');
+                const isPermalink = h.includes('story_fbid=') || h.includes('pfbid');
                 if (!isSlugPost && !isPermalink) return;
                 let clean = h.split('?')[0];
-                if (isPermalink) {
+                if (h.includes('story_fbid=')) {
                     try {
                         const u = new URL(h);
                         const fbid = u.searchParams.get('story_fbid');
@@ -364,6 +389,9 @@ async def collect_parallel(pages_config: list, output_file: str):
     for cat, count in sorted(cats.items()):
         print(f"  {cat:15}: {count}")
 
+    if all_new:
+        _push_to_supabase(all_new)
+
 
 async def collect_single(page_url: str, output_file: str, max_posts: int):
     """Single-page mode (backward compatible)."""
@@ -390,6 +418,9 @@ async def collect_single(page_url: str, output_file: str, max_posts: int):
     )
     print(f"\n✓ Saved {len(all_items)} URLs → {output_file}")
     print(f"  Newly collected: {len(collected)}")
+
+    if collected:
+        _push_to_supabase(collected)
 
 
 if __name__ == "__main__":

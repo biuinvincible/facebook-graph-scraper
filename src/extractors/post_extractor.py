@@ -684,11 +684,10 @@ class PostExtractor:
                     continue
                 if any(p in src for p in self._EXCLUDE_IMG_PATHS):
                     continue
-                # Exclude images inside comment articles (comment section trong cùng container)
+                # Exclude images inside comment sections only (not the post article itself)
                 in_comment = await img.evaluate(
                     "el => !!el.closest('[aria-label*=\"Bình luận dưới tên\"]') || "
-                    "!!el.closest('[aria-label*=\"Comment by\"]') || "
-                    "!!el.closest('[role=\"article\"]')"
+                    "!!el.closest('[aria-label*=\"Comment by\"]')"
                 )
                 if in_comment:
                     continue
