@@ -1,0 +1,213 @@
+# Pages mới cần collect URLs — chạy từng batch 5 pages:
+#   python collect_urls.py --parallel pages_batch_1.yaml targets_all_domains.yaml
+#
+# Mỗi batch chạy ~30-60 phút tùy số post/page
+# Chạy tuần tự: batch_1 xong → batch_2, v.v.
+#
+# ── BATCH 1: Tin tức (5 pages) ─────────────────────────────────────────────
+- url: https://www.facebook.com/congdongvnexpress/
+  session: cookies/session_2.json
+  category: tin_tuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/baotuoitre/
+  session: cookies/session_3.json
+  category: tin_tuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/thanhnien/
+  session: cookies/session_4.json
+  category: tin_tuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/baodantridientu/
+  session: cookies/session_5.json
+  category: tin_tuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/K14vn/
+  session: cookies/session_6.json
+  category: tin_tuc
+  max_posts: 2000
+
+# ── BATCH 2: Tin tức tiếp + Giáo dục ──────────────────────────────────────
+- url: https://www.facebook.com/VTVtoiyeu/
+  session: cookies/session_2.json
+  category: tin_tuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/laodongonline/
+  session: cookies/session_3.json
+  category: tin_tuc
+  max_posts: 1500
+
+- url: https://www.facebook.com/hethonggiaoduchocmai/
+  session: cookies/session_4.json
+  category: giao_duc
+  max_posts: 1000
+
+- url: https://www.facebook.com/marathon.edu.vn/
+  session: cookies/session_5.json
+  category: giao_duc
+  max_posts: 1000
+
+- url: https://www.facebook.com/hust.edu.vn/
+  session: cookies/session_6.json
+  category: giao_duc
+  max_posts: 1000
+
+# ── BATCH 3: Công nghệ + Kinh tế ──────────────────────────────────────────
+- url: https://www.facebook.com/tinhte/
+  session: cookies/session_2.json
+  category: cong_nghe
+  max_posts: 2000
+
+- url: https://www.facebook.com/Genk.vn/
+  session: cookies/session_3.json
+  category: cong_nghe
+  max_posts: 1500
+
+- url: https://www.facebook.com/VnReview.vn/
+  session: cookies/session_4.json
+  category: cong_nghe
+  max_posts: 1500
+
+- url: https://www.facebook.com/CafeF/
+  session: cookies/session_5.json
+  category: kinh_te
+  max_posts: 2000
+
+- url: https://www.facebook.com/cafebiz.vn/
+  session: cookies/session_6.json
+  category: kinh_te
+  max_posts: 2000
+
+# ── BATCH 4: Kinh tế tiếp + Phim ảnh ─────────────────────────────────────
+- url: https://www.facebook.com/vneconomy.vn/
+  session: cookies/session_2.json
+  category: kinh_te
+  max_posts: 1500
+
+- url: https://www.facebook.com/forbesvietnam.official/
+  session: cookies/session_3.json
+  category: kinh_te
+  max_posts: 1000
+
+- url: https://www.facebook.com/cgvcinemavietnam/
+  session: cookies/session_4.json
+  category: phim_anh
+  max_posts: 1500
+
+- url: https://www.facebook.com/raplottevietnam/
+  session: cookies/session_5.json
+  category: phim_anh
+  max_posts: 1500
+
+- url: https://www.facebook.com/galaxycinevn/
+  session: cookies/session_6.json
+  category: phim_anh
+  max_posts: 1500
+
+# ── BATCH 5: Du lịch + Sức khỏe ──────────────────────────────────────────
+- url: https://www.facebook.com/ivivu/
+  session: cookies/session_2.json
+  category: du_lich
+  max_posts: 1500
+
+- url: https://www.facebook.com/TravelokaVietnam/
+  session: cookies/session_3.json
+  category: du_lich
+  max_posts: 1500
+
+- url: https://www.facebook.com/saigontourist.sts/
+  session: cookies/session_4.json
+  category: du_lich
+  max_posts: 1000
+
+- url: https://www.facebook.com/Vinmec/
+  session: cookies/session_5.json
+  category: suc_khoe
+  max_posts: 1500
+
+- url: https://www.facebook.com/hellobacsi/
+  session: cookies/session_6.json
+  category: suc_khoe
+  max_posts: 1500
+
+# ── BATCH 6: Sức khỏe tiếp + Thời trang ──────────────────────────────────
+- url: https://www.facebook.com/baosuckhoevadoisong/
+  session: cookies/session_2.json
+  category: suc_khoe
+  max_posts: 1500
+
+- url: https://www.facebook.com/ELLEVietnam/
+  session: cookies/session_3.json
+  category: thoi_trang
+  max_posts: 1500
+
+- url: https://www.facebook.com/HarpersBazaarVN/
+  session: cookies/session_4.json
+  category: thoi_trang
+  max_posts: 1500
+
+- url: https://www.facebook.com/tapchidep/
+  session: cookies/session_5.json
+  category: thoi_trang
+  max_posts: 1000
+
+- url: https://www.facebook.com/VogueVietnam/
+  session: cookies/session_6.json
+  category: thoi_trang
+  max_posts: 1000
+
+# ── BATCH 7: Game ─────────────────────────────────────────────────────────
+- url: https://www.facebook.com/freefirevn/
+  session: cookies/session_2.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/Leagueoflegendsvn/
+  session: cookies/session_3.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/MobileLegendsGameVN/
+  session: cookies/session_4.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/PUBGMobileVN/
+  session: cookies/session_5.json
+  category: game
+  max_posts: 1500
+
+- url: https://www.facebook.com/GARENA.VietNam.vnn/
+  session: cookies/session_6.json
+  category: game
+  max_posts: 1500
+
+# ── BATCH 8: Ẩm thực mở rộng + Giáo dục thêm ────────────────────────────
+- url: https://www.facebook.com/FoodyVietnam/
+  session: cookies/session_2.json
+  category: am_thuc
+  max_posts: 2000
+
+- url: https://www.facebook.com/bepcominh/
+  session: cookies/session_3.json
+  category: am_thuc
+  max_posts: 1000
+
+- url: https://www.facebook.com/feedy.vn/
+  session: cookies/session_4.json
+  category: am_thuc
+  max_posts: 1000
+
+- url: https://www.facebook.com/FulbrightUniVN/
+  session: cookies/session_5.json
+  category: giao_duc
+  max_posts: 500
+
+- url: https://www.facebook.com/Quantrimang.com/
+  session: cookies/session_6.json
+  category: cong_nghe
+  max_posts: 1500

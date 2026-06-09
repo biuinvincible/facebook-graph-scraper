@@ -43,6 +43,7 @@ def json_to_hetero_dict(json_path: str) -> Dict[str, Any]:
         "user": {},
         "comment": {},
         "hashtag": {},
+        "image": {},
     }
 
     def get_id(ntype: str, nid: str) -> int:
@@ -69,6 +70,10 @@ def json_to_hetero_dict(json_path: str) -> Dict[str, Any]:
     # Hashtags
     for h in gs.get("hashtag_nodes", []):
         get_id("hashtag", h["hashtag"])
+
+    # Image nodes
+    for img in gs.get("image_nodes", []):
+        get_id("image", img["image_id"])
 
     # Users từ user_user edges
     for e in gs.get("edges_user_user", []):
@@ -128,6 +133,25 @@ def json_to_hetero_dict(json_path: str) -> Dict[str, Any]:
                 (get_id("post", e["post_id"]), get_id("hashtag", e["hashtag"]))
             )
 
+    # Post/Comment ↔ Image edges
+    for e in gs.get("edges_content_image", []):
+        iid = e["image_id"]
+        sid = e["source_id"]
+        stype = e["source_type"]
+        direction = e["direction"]
+        if iid not in node_ids["image"]: continue
+        if direction == "contains":
+            src_type = stype   # "post" | "comment"
+            dst_type = "image"
+            src_id = get_id(src_type, sid)
+            dst_id = get_id("image", iid)
+        else:  # contained_by
+            src_type = "image"
+            dst_type = stype
+            src_id = get_id("image", iid)
+            dst_id = get_id(stype, sid)
+        edges[(src_type, direction, dst_type)].append((src_id, dst_id))
+
     # ── Convert to numpy edge_index arrays ───────────────────────────────────
     edge_index_dict = {}
     for (src_type, rel, dst_type), pairs in edges.items():
@@ -155,6 +179,7 @@ def json_to_hetero_dict(json_path: str) -> Dict[str, Any]:
         "raw_text": d.get("node_features", {}).get("text", ""),
         "image_urls": d.get("node_features", {}).get("image_urls", []),
         "local_images": d.get("node_features", {}).get("local_images", []),
+        "image_nodes": gs.get("image_nodes", []),  # [{image_id, local_path, source_type, source_id}]
     }
 
 

@@ -14,14 +14,30 @@ Usage parallel (nhiều pages cùng lúc, mỗi page 1 session riêng):
     - url: https://www.facebook.com/trollbongda/
       session: cookies/session_3.json
       category: the_thao
+
+Strategy:
+  1. Intercept GraphQL responses (PolarisProfilePostsPagelet, ProfileCometTimeline, etc.)
+     → extract pfbid / numeric post IDs
+  2. Fallback: scan <a href> in DOM (works for older-style pages)
 """
 import asyncio
+import re
 import sys
 import json
 import os
 import yaml
 from pathlib import Path
 sys.path.insert(0, ".")
+
+# Chỉ chấp nhận URL trỏ đến bài post thực sự
+_POST_URL_RE = re.compile(
+    r'facebook\.com/(?:[^/]+/posts/(?:pfbid[A-Za-z0-9]+|\d+)'   # /page/posts/ID
+    r'|permalink\.php\?story_fbid=\d+'                            # permalink.php?story_fbid=
+    r'|[^/]+/permalink/\d+)'                                      # /page/permalink/ID
+)
+
+def is_valid_post_url(url: str) -> bool:
+    return bool(_POST_URL_RE.search(url))
 
 JS_COLLECT = """
     (slug) => {
@@ -64,6 +80,88 @@ JS_COLLECT = """
     }
 """
 
+# MutationObserver: bắt post links ngay khi xuất hiện trong DOM,
+# trước khi bị virtual-scroll xóa. Kết quả lưu vào window.__fbPostLinks[].
+JS_INSTALL_OBSERVER = """
+    (slug) => {
+        if (window.__fbObserver) return 0;  // đã cài
+        window.__fbPostLinks = [];
+        const slugLow = slug ? slug.toLowerCase() : '';
+
+        function extractFromNode(node) {
+            if (!node || !node.querySelectorAll) return;
+            node.querySelectorAll('a[href]').forEach(a => {
+                const h = a.href || '';
+                if (!h || h.includes('/reel/') || h.includes('/videos/')) return;
+                if (h.includes('/groups/')) return;
+                const isSlugPost = slugLow && (
+                    h.toLowerCase().includes('/' + slugLow + '/posts/') ||
+                    h.toLowerCase().includes('/' + slugLow + '/permalink/')
+                );
+                const isPermalink = h.includes('story_fbid=');
+                if (!isSlugPost && !isPermalink) return;
+                let clean = h.split('?')[0];
+                if (isPermalink) {
+                    try {
+                        const u = new URL(h);
+                        const fbid = u.searchParams.get('story_fbid');
+                        const id = u.searchParams.get('id');
+                        if (fbid) clean = id
+                            ? 'https://www.facebook.com/permalink.php?story_fbid=' + fbid + '&id=' + id
+                            : 'https://www.facebook.com/permalink.php?story_fbid=' + fbid;
+                    } catch(e) {}
+                }
+                window.__fbPostLinks.push(clean);
+            });
+        }
+
+        window.__fbObserver = new MutationObserver(mutations => {
+            for (const m of mutations) {
+                for (const node of m.addedNodes) {
+                    extractFromNode(node);
+                }
+            }
+        });
+        window.__fbObserver.observe(document.body, {childList: true, subtree: true});
+        // Scan DOM hiện tại ngay lúc cài
+        extractFromNode(document.body);
+        return 1;
+    }
+"""
+
+JS_DRAIN_LINKS = """
+    () => {
+        const links = window.__fbPostLinks || [];
+        window.__fbPostLinks = [];
+        return links;
+    }
+"""
+
+
+def _extract_post_ids_from_graphql(body: str, slug: str) -> list:
+    """Parse GraphQL response body, trả về list post URLs."""
+    urls = []
+    try:
+        # pfbid dạng chuỗi base64-encoded opaque ID
+        pfbids = re.findall(r'pfbid[A-Za-z0-9]{20,}', body)
+        for pid in pfbids:
+            urls.append(f"https://www.facebook.com/{slug}/posts/{pid}")
+
+        # Numeric story/post IDs trong JSON: "story_id":"123", "post_id":"123"
+        for key in ("story_id", "post_id", "node_id"):
+            for nid in re.findall(rf'"{key}"\s*:\s*"(\d{{10,}})"', body):
+                urls.append(f"https://www.facebook.com/{slug}/posts/{nid}")
+
+        # permalink_url trực tiếp
+        for raw in re.findall(r'"permalink_url"\s*:\s*"([^"]+)"', body):
+            url = raw.replace("\\/", "/")
+            if "/posts/" in url or "story_fbid" in url:
+                urls.append(url.split("?")[0])
+
+    except Exception:
+        pass
+    return urls
+
 
 async def collect_one(
     page_url: str,
@@ -81,6 +179,20 @@ async def collect_one(
     _slug = urlparse(page_url).path.strip("/").split("/")[0]
     collected = []
 
+    async def _add_url(url: str):
+        """Thêm url vào collected nếu hợp lệ và chưa có."""
+        if not is_valid_post_url(url):
+            return
+        url = url.split("?")[0]
+        if shared_seen is not None and lock is not None:
+            async with lock:
+                if url in shared_seen:
+                    return
+                shared_seen.add(url)
+        collected.append({"type": "post", "url": url, "category": category})
+        if len(collected) % 50 == 1:
+            print(f"[{_slug}] {len(collected)}/{max_posts} URLs")
+
     async def _run(p):
         browser = await p.chromium.launch(
             headless=True,
@@ -92,7 +204,26 @@ async def collect_one(
             timezone_id="Asia/Ho_Chi_Minh",
         )
         await context.add_cookies(cookies)
+
+        # Intercept GraphQL responses — nguồn chính để lấy post IDs
+        graphql_queue: asyncio.Queue = asyncio.Queue()
+
+        async def _on_response(response):
+            if len(collected) >= max_posts:
+                return
+            url = response.url
+            if "graphql" not in url and "api/graphql" not in url:
+                return
+            try:
+                body = await response.text()
+                ids = _extract_post_ids_from_graphql(body, _slug)
+                for pid_url in ids:
+                    await graphql_queue.put(pid_url)
+            except Exception:
+                pass
+
         page = await context.new_page()
+        page.on("response", lambda r: asyncio.ensure_future(_on_response(r)))
 
         print(f"[{_slug}] Loading {page_url} ...")
         try:
@@ -104,44 +235,69 @@ async def collect_one(
 
         await asyncio.sleep(5)
 
+        # Cài MutationObserver — bắt links ngay khi xuất hiện, trước khi virtual scroll xóa
+        await page.evaluate(JS_INSTALL_OBSERVER, _slug)
+
         local_seen: set = set()
         no_new_streak = 0
         scroll_count = 0
 
+        async def _drain_all():
+            """Drain cả MutationObserver links + GraphQL queue."""
+            new_found = 0
+
+            # 1. Observer links (virtual-scroll pages)
+            obs_links = await page.evaluate(JS_DRAIN_LINKS)
+            for url in obs_links:
+                if url in local_seen:
+                    continue
+                local_seen.add(url)
+                if len(collected) < max_posts:
+                    await _add_url(url)
+                    new_found += 1
+
+            # 2. GraphQL queue
+            while not graphql_queue.empty():
+                url = await graphql_queue.get()
+                if url in local_seen:
+                    continue
+                local_seen.add(url)
+                if len(collected) < max_posts:
+                    await _add_url(url)
+                    new_found += 1
+
+            # 3. Fallback: scan DOM <a href> (pages dùng format cũ)
+            dom_links = await page.evaluate(JS_COLLECT, _slug)
+            for url in dom_links:
+                if url in local_seen:
+                    continue
+                local_seen.add(url)
+                if len(collected) < max_posts:
+                    await _add_url(url)
+                    new_found += 1
+
+            return new_found
+
         while len(collected) < max_posts:
-            links = await page.evaluate(JS_COLLECT, _slug)
+            new_this_round = await _drain_all()
 
-            # Tách: "page còn content mới không" (local_seen) vs "đã có trong dataset" (shared_seen)
-            # → dừng scroll khi PAGE hết content, không phải khi tất cả đã có trong dataset
-            new_to_session = [u for u in links if u not in local_seen]
-            for u in new_to_session:
-                local_seen.add(u)
-
-            if not new_to_session:
+            if new_this_round == 0:
                 no_new_streak += 1
-                if no_new_streak >= 8:
-                    print(f"[{_slug}] Dừng sau 8 scrolls không mới — {len(collected)} URLs")
+                if no_new_streak >= 12:
+                    print(f"[{_slug}] Dừng sau 12 scrolls không mới — {len(collected)} URLs")
                     break
             else:
                 no_new_streak = 0
-
-            for url in new_to_session:
-                if len(collected) >= max_posts:
-                    break
-                if shared_seen is not None and lock is not None:
-                    async with lock:
-                        if url in shared_seen:
-                            continue
-                        shared_seen.add(url)
-                collected.append({"type": "post", "url": url, "category": category})
-                if len(collected) % 50 == 1:
-                    print(f"[{_slug}] {len(collected)}/{max_posts} URLs")
 
             await page.evaluate("window.scrollBy(0, 800)")
             await asyncio.sleep(2)
             scroll_count += 1
             if scroll_count % 10 == 0:
                 print(f"[{_slug}] scroll={scroll_count}, collected={len(collected)}")
+
+        # Drain lần cuối
+        await asyncio.sleep(2)
+        await _drain_all()
 
         await browser.close()
         print(f"[{_slug}] Done: {len(collected)} URLs")

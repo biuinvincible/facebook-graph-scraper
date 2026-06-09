@@ -1,0 +1,40 @@
+# Game community/meme/news pages — thay thế official pages (chỉ đăng Reels)
+- url: https://www.facebook.com/trollgamecom/
+  session: cookies/session_3.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/caothuLQM/
+  session: cookies/session_5.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/gamek.vn/
+  session: cookies/session_6.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/vnesportstv/
+  session: cookies/session_3.json
+  category: game
+  max_posts: 2000
+
+- url: https://www.facebook.com/gamehub.vn/
+  session: cookies/session_5.json
+  category: game
+  max_posts: 1500
+
+- url: https://www.facebook.com/lolesportsvn/
+  session: cookies/session_6.json
+  category: game
+  max_posts: 1500
+
+- url: https://www.facebook.com/nghienvalorant/
+  session: cookies/session_3.json
+  category: game
+  max_posts: 1500
+
+- url: https://www.facebook.com/motgameesports/
+  session: cookies/session_5.json
+  category: game
+  max_posts: 1000
